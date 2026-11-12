@@ -26,6 +26,7 @@ Ako se kasnije pokaže potreba za više resursa: nadogradnja na Business paket i
 - Baza: privremeno **SQLite** datoteka `storage/arena-rs.sqlite` (vlasnik još odlučuje o MySQL bazi na hostingu). Prelazak na MySQL: `php tools/package-proba.php <baza> <korisnik>` + `tools/set-proba-db-pass.sh`.
 - Paket: `php tools/package-proba.php` → `build/proba/` → Hostinger deploy samo na proba.brckoworldcup.com. Svaki novi paket pravi nove probne lozinke (`PROBA-NALOZI.txt`, lokalno) — postojeća baza ih ne mijenja; ponovni deploy ne briše `storage/arena-rs.sqlite` samo ako ga deploy ne prepiše (prije deploya napraviti backup).
 - Zaštita: `.htaccess` odbija app/, storage/, migrations/, tools/, config.php (provjereno: 403); noindex; žuta traka „PROBNO OKRUŽENJE“; kod se prikazuje na ekranu (SMS se ne šalje).
-- Cron (obavijesti, podsjetnici, dnevni backup) NIJE postavljen — dodaje vlasnik u hPanel → Napredno → Cron poslovi:
-  `*/5 * * * *  cd /home/u270359984/domains/brckoworldcup.com/public_html/proba-rezervacije && php cron.php all`
+- Cron: CLI varijanta (`cd …/proba-rezervacije && php cron.php all`) je upisana ali se na ovom paketu NE izvršava (provjereno 12.11.2026: bez izlaza, bez zapisa). Koristi se web-cron (hPanel → Advanced → Cron Jobs → Custom, `*/5 * * * *`):
+  `wget -q -O /dev/null https://proba.brckoworldcup.com/rezervacije/api/cron`
+  Zadnje pokretanje vidi se u Administraciji (Kalendar, iznad kalendara). Isto važi za produkciju (`https://arenabrcko.com/rezervacije/api/cron`).
 - Pažnja: folder je unutar `public_html` glavnog sajta; objava glavnog sajta zip paketom ga može obrisati.

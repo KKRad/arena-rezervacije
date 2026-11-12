@@ -1,0 +1,3 @@
+# Dodati u public_html/.htaccess postojećeg sajta (unutar <IfModule mod_rewrite.c>, PRIJE ostalih pravila):
+RewriteRule ^(rezervacije|nalog|administracija)(/.*)?$ /_rs/index.php [L,QSA]
+# Zaštita: direktan pristup kodu nije moguć jer je kod izvan public_html.

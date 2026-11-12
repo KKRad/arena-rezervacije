@@ -39,8 +39,8 @@ final class Api
 
         switch ($key) {
             // ---------- javno ----------
-            case 'GET calendar/day': return Calendar::day((string) ($q['date'] ?? Clock::today()), $this->mode(), $this->u);
-            case 'GET calendar/week': return Calendar::week((string) ($q['date'] ?? Clock::today()), $this->mode(), $this->u);
+            case 'GET calendar/day': return Calendar::day((string) (($q['date'] ?? '') ?: Clock::today()), $this->mode(), $this->u);
+            case 'GET calendar/week': return Calendar::week((string) (($q['date'] ?? '') ?: Clock::today()), $this->mode(), $this->u);
             case 'GET events/:id': return Events::get($id, Perms::has($this->u, 'events.manage'));
             case 'GET clubs/public': return Clubs::all(false);
 

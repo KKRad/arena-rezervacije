@@ -42,6 +42,9 @@ h3 { font-size: 15px; margin: 12px 0 6px; }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .field label { font-size: 13px; color: var(--muted); }
 .field input, .field select, .field textarea { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; width: 100%; }
+.field input[type=checkbox], .field input[type=radio], label input[type=checkbox] { width: auto; padding: 0; margin: 0 6px 0 0; vertical-align: -2px; }
+.chip.busy:not(.on) { text-decoration: line-through; }
+.chip.busy.on { background: var(--bad); border-color: var(--bad); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
 .row > .field { flex: 1 1 140px; }
 .err { color: var(--bad); font-size: 14px; margin: 6px 0; }

@@ -86,6 +86,8 @@ final class Auth
     public static ?array $user = null;
     /** U testovima: posljednji poslani kod (samo dev/test okruženje). */
     public static ?string $lastCode = null;
+    /** Stvarni status slanja posljednjeg koda: sent | not_configured | failed | pending. */
+    public static ?string $lastSmsStatus = null;
 
     public static function userById(int $id): ?array { return Db::one('SELECT * FROM users WHERE id = ?', [$id]); }
     public static function userByPhone(string $phone): ?array { return Db::one('SELECT * FROM users WHERE phone = ?', [$phone]); }
@@ -114,7 +116,8 @@ final class Auth
             'payload' => $payload ? json_encode($payload, JSON_UNESCAPED_UNICODE) : null,
             'created_utc' => Clock::nowUtc(), 'expires_utc' => Clock::utcPlus('+15 minutes'),
         ]);
-        Notify::direct('verify_code', 'sms', $phone, "Arena Bakarni: vaš kod je $code (važi 15 minuta).", "code:$id");
+        $oid = Notify::direct('verify_code', 'sms', $phone, "Arena Bakarni: vaš kod je $code (važi 15 minuta).", "code:$id");
+        self::$lastSmsStatus = Notify::sendNow($oid);
         if (Config::get('env') !== 'prod') self::$lastCode = $code;
         return $code;
     }

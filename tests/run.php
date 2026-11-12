@@ -458,7 +458,8 @@ test('Nalozi: registracija, povezivanje profila, prijava, oporavak, ograničenja
     [$st, $res] = $api->handle('POST', 'auth/register', [], ['first_name' => 'Petar', 'last_name' => 'Perić', 'phone' => '0038765123456', 'email' => 'p@example.test', 'password' => 'tajna12345']);
     eq($st, 200, 'registracija start');
     $code = $res['data']['dev_code'];
-    eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'verify_code' AND status = 'pending'"), 1, 'kod u redu poruka');
+    eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'verify_code' AND status = 'not_configured'"), 1, 'kod odmah obrađen: bez kanala status nije poslano');
+    eq($res['data']['sms'], 'not_configured', 'ekran dobija stvarni status SMS-a');
     eq($api->handle('POST', 'auth/confirm', [], ['phone' => '065123456', 'code' => '000000' === $code ? '111111' : '000000'])[0], 400, 'pogrešan kod');
     [$st] = $api->handle('POST', 'auth/confirm', [], ['phone' => '065123456', 'code' => $code]);
     eq($st, 200, 'potvrda koda');

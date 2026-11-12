@@ -1,6 +1,6 @@
 <?php
 // Pravi build/proba/ za probnu poddomenu (kod u korijenu poddomene, zaštićen .htaccess-om).
-// php tools/package-proba.php                     — privremena SQLite baza (storage/arena-rs.sqlite, zaštićena)
+// php tools/package-proba.php                     — privremena SQLite baza u ../proba-data/ (IZVAN foldera sajta: objava je ne briše)
 // php tools/package-proba.php <db_name> <db_user>   — MySQL; lozinka baze se čita iz storage/proba-db-pass (nije u gitu)
 // Lozinke probnih naloga: nasumične, zapisuju se SAMO lokalno u PROBA-NALOZI.txt (nije u gitu); na server idu samo hash-evi.
 $root = dirname(__DIR__);
@@ -22,9 +22,9 @@ $copy("$root/public/_rs", "$out/_rs");
 copy("$root/cron.php", "$out/cron.php");
 @mkdir("$out/assets/img", 0775, true);
 foreach (['logo-light.webp', 'favicon.png'] as $f) copy("$root/../arena-bakarni-site/assets/img/$f", "$out/assets/img/$f");
-$dbExport = $sqlite ? "['dsn' => 'sqlite:' . __DIR__ . '/storage/arena-rs.sqlite', 'user' => null, 'pass' => null]"
+$dbExport = $sqlite ? "['dsn' => 'sqlite:' . dirname(__DIR__, 2) . '/proba-data/arena-rs.sqlite', 'user' => null, 'pass' => null]"
     : var_export(['dsn' => "mysql:host=127.0.0.1;port=3306;dbname=$dbName;charset=utf8mb4", 'user' => $dbUser, 'pass' => $pass], true);
-file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'base_url' => 'https://proba.brckoworldcup.com', 'cookie_secure' => true, 'channels' => []];\n");
+file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'data_dir' => dirname(__DIR__, 2) . '/proba-data',\n  'base_url' => 'https://proba.brckoworldcup.com', 'cookie_secure' => true, 'channels' => []];\n");
 $htDeny = "Require all denied\n";
 foreach (['app', 'migrations', 'tools', 'storage'] as $d) file_put_contents("$out/$d/.htaccess", $htDeny);
 file_put_contents("$out/.htaccess", <<<HT
@@ -53,6 +53,13 @@ $accounts = [
     ['first_name' => 'Gost', 'last_name' => 'Probni', 'phone' => '+38761100100', 'email' => 'gost@example.test', 'role' => 'guest'],
     ['first_name' => 'Član', 'last_name' => 'Rada', 'phone' => '+38761200200', 'email' => 'clan@example.test', 'role' => 'guest', 'club' => 'Rad'],
 ];
+// Lozinke se prave samo jednom i čuvaju lokalno (storage/proba-seed.json + PROBA-NALOZI.txt), da nova objava ne promijeni prijave.
+$keep = "$root/storage/proba-seed.json";
+if (is_file($keep) && is_file("$root/PROBA-NALOZI.txt")) {
+    copy($keep, "$out/storage/proba-seed.json");
+    echo "build/proba spreman (postojeće probne lozinke iz PROBA-NALOZI.txt)\n";
+    exit;
+}
 $lines = ["PROBNI NALOZI — https://proba.brckoworldcup.com/nalog/  (samo probno okruženje; ne koristiti ove lozinke nigdje drugdje)", ''];
 foreach ($accounts as &$a) {
     $pw = $gen();
@@ -60,5 +67,6 @@ foreach ($accounts as &$a) {
     $lines[] = sprintf('%-10s prijava: %-16s lozinka: %s', $a['role'], $a['username'] ?? ('0' . substr($a['phone'], 4)), $pw);
 }
 file_put_contents("$out/storage/proba-seed.json", json_encode(['users' => $accounts], JSON_UNESCAPED_UNICODE));
+copy("$out/storage/proba-seed.json", $keep);
 file_put_contents("$root/PROBA-NALOZI.txt", implode("\n", $lines) . "\n");
 echo "build/proba spreman; nalozi u PROBA-NALOZI.txt\n";

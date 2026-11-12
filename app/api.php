@@ -46,11 +46,11 @@ final class Api
             case 'GET cron': $r = Jobs::run('web'); return isset($r['skipped']) ? ['skipped' => $r['skipped']] : ['ok' => true];
 
             // ---------- nalog ----------
-            case 'POST auth/register': return Auth::registerStart($in) + ['dev_code' => $this->devCode()];
+            case 'POST auth/register': return Auth::registerStart($in) + ['dev_code' => $this->devCode(), 'sms' => Auth::$lastSmsStatus];
             case 'POST auth/confirm': $r = Auth::registerConfirm($in); $this->setToken = $r['token']; return ['user' => Auth::publicUser(Auth::userById($r['user_id']))];
             case 'POST auth/login': $r = Auth::login((string) ($in['login'] ?? ''), (string) ($in['password'] ?? ''), $this->ip); $this->setToken = $r['token']; return ['user' => Auth::publicUser(Auth::userById($r['user_id']))];
             case 'POST auth/logout': Auth::logout($this->token); $this->clearToken = true; return null;
-            case 'POST auth/reset': return Auth::resetStart($in) + ['dev_code' => $this->devCode()];
+            case 'POST auth/reset': return Auth::resetStart($in) + ['dev_code' => $this->devCode(), 'sms' => Auth::$lastSmsStatus === 'failed' ? 'failed' : null];
             case 'POST auth/reset-confirm': $r = Auth::resetConfirm($in); $this->setToken = $r['token']; return ['user' => Auth::publicUser(Auth::userById($r['user_id']))];
             case 'GET me': return $this->u ? ['user' => Auth::publicUser($this->u), 'perms' => Perms::forUser($this->u), 'staff' => Perms::isStaff($this->u), 'club' => $this->u['club_id'] ? Db::one('SELECT id, name FROM clubs WHERE id = ?', [$this->u['club_id']]) : null] : ['user' => null];
             case 'GET me/overview': return $this->overview((int) $this->me()['id'], false);
@@ -248,7 +248,7 @@ final class Api
     private function requests(): array
     {
         return [
-            'monthly' => Db::all("SELECT m.*, TRIM(CONCAT(u.first_name,' ',u.last_name)) name, u.phone FROM monthly_requests m JOIN users u ON u.id = m.user_id WHERE m.status = 'pending' ORDER BY m.id"),
+            'monthly' => array_map(fn($r) => ['phone' => Phone::pretty($r['phone'])] + $r, Db::all("SELECT m.*, TRIM(CONCAT(u.first_name,' ',u.last_name)) name, u.phone FROM monthly_requests m JOIN users u ON u.id = m.user_id WHERE m.status = 'pending' ORDER BY m.id")),
             'series' => Perms::has($this->u, 'clubs.manage') ? Series::list($this->u, 'pending') : [],
         ];
     }

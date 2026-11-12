@@ -33,6 +33,13 @@ final class Config
         return $v;
     }
     public static function all(): array { if (self::$cfg === null) self::load(); return self::$cfg; }
+    /** Folder za podatke koji moraju preživjeti ponovnu objavu (baza, backup, PDF, lock). */
+    public static function dataDir(): string
+    {
+        $d = (string) self::get('data_dir', dirname(__DIR__, 2) . '/storage');
+        if (!is_dir($d)) @mkdir($d, 0770, true);
+        return $d;
+    }
 }
 
 /**
@@ -50,6 +57,8 @@ final class Db
         $opts = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
         self::$driver = str_starts_with($c['dsn'], 'sqlite:') ? 'sqlite' : 'mysql';
         if (self::$driver === 'sqlite') {
+            $file = substr($c['dsn'], 7);
+            if ($file !== ':memory:' && !is_dir(dirname($file))) @mkdir(dirname($file), 0770, true);
             $pdo = method_exists(PDO::class, 'connect') ? PDO::connect($c['dsn'], null, null, $opts) : new PDO($c['dsn'], null, null, $opts);
             $pdo->setAttribute(PDO::ATTR_TIMEOUT, 10);
             $pdo->exec('PRAGMA journal_mode = WAL');

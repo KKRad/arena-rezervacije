@@ -85,10 +85,19 @@ final class Notify
         return match ($c['adapter']) { 'smtp' => new SmtpChannel($c), 'http' => new HttpChannel($c), default => null };
     }
 
-    public static function direct(string $type, string $channel, string $to, string $body, string $idemBase, ?string $subject = null, ?string $attachment = null): void
+    public static function direct(string $type, string $channel, string $to, string $body, string $idemBase, ?string $subject = null, ?string $attachment = null): int
     {
         Db::q('INSERT IGNORE INTO outbox (idem_key, channel, to_addr, type, subject, body, attachment_path, status, next_attempt_utc, created_utc) VALUES (?,?,?,?,?,?,?,?,?,?)',
             [$idemBase . ':' . $to, $channel, $to, $type, $subject, $body, $attachment, 'pending', Clock::nowUtc(), Clock::nowUtc()]);
+        return (int) Db::val('SELECT id FROM outbox WHERE idem_key = ?', [$idemBase . ':' . $to]);
+    }
+
+    /** Odmah pokušaj slanja jedne poruke (verifikacioni kodovi ne mogu čekati cron). Vraća stvarni status. */
+    public static function sendNow(int $id): string
+    {
+        $m = Db::one("SELECT * FROM outbox WHERE id = ? AND status = 'pending'", [$id]);
+        if ($m) self::process($m);
+        return (string) Db::val('SELECT status FROM outbox WHERE id = ?', [$id]);
     }
 
     private static function resText(array $r): string
@@ -178,23 +187,27 @@ final class Notify
         $stats = ['sent' => 0, 'failed' => 0, 'not_configured' => 0];
         Db::q("UPDATE outbox SET status = 'failed', last_error = 'Nepoznat ishod (prekid tokom slanja) — provjeriti ručno, ne šalje se ponovo automatski' WHERE status = 'sending' AND next_attempt_utc < ?", [Clock::utcPlus('-15 minutes')]);
         $rows = Db::all("SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_utc <= ? ORDER BY id LIMIT " . (int) $limit, [Clock::nowUtc()]);
-        foreach ($rows as $m) {
-            $ch = self::channel($m['channel']);
-            if (!$ch) { Db::update('outbox', ['status' => 'not_configured', 'last_error' => 'Kanal „' . $m['channel'] . '“ nije povezan — poruka NIJE poslana'], 'id = ? AND status = ?', [$m['id'], 'pending']); $stats['not_configured']++; continue; }
-            if (!Db::q("UPDATE outbox SET status = 'sending', next_attempt_utc = ? WHERE id = ? AND status = 'pending'", [Clock::nowUtc(), $m['id']])->rowCount()) continue;
-            try {
-                $ref = $ch->send($m['to_addr'], $m['subject'], $m['body'], $m['attachment_path']);
-                Db::update('outbox', ['status' => 'sent', 'sent_utc' => Clock::nowUtc(), 'provider_ref' => $ref, 'attempts' => (int) $m['attempts'] + 1], 'id = ?', [$m['id']]);
-                $stats['sent']++;
-            } catch (Throwable $e) {
-                $att = (int) $m['attempts'] + 1;
-                $delays = [60, 300, 900, 3600, 10800, 21600];
-                $final = $att >= count($delays);
-                Db::update('outbox', ['status' => $final ? 'failed' : 'pending', 'attempts' => $att, 'last_error' => substr($e->getMessage(), 0, 500), 'next_attempt_utc' => Clock::utcPlus('+' . ($delays[$att - 1] ?? 21600) . ' seconds')], 'id = ?', [$m['id']]);
-                $stats['failed']++;
-            }
-        }
+        foreach ($rows as $m) { $r = self::process($m); if ($r) $stats[$r]++; }
         return $stats;
+    }
+
+    /** Jedna poruka: claim (pending → sending) pa slanje. Vraća sent | failed | not_configured | null (preuzeo drugi proces). */
+    private static function process(array $m): ?string
+    {
+        $ch = self::channel($m['channel']);
+        if (!$ch) { Db::update('outbox', ['status' => 'not_configured', 'last_error' => 'Kanal „' . $m['channel'] . '“ nije povezan — poruka NIJE poslana'], 'id = ? AND status = ?', [$m['id'], 'pending']); return 'not_configured'; }
+        if (!Db::q("UPDATE outbox SET status = 'sending', next_attempt_utc = ? WHERE id = ? AND status = 'pending'", [Clock::nowUtc(), $m['id']])->rowCount()) return null;
+        try {
+            $ref = $ch->send($m['to_addr'], $m['subject'], $m['body'], $m['attachment_path']);
+            Db::update('outbox', ['status' => 'sent', 'sent_utc' => Clock::nowUtc(), 'provider_ref' => $ref, 'attempts' => (int) $m['attempts'] + 1], 'id = ?', [$m['id']]);
+            return 'sent';
+        } catch (Throwable $e) {
+            $att = (int) $m['attempts'] + 1;
+            $delays = [60, 300, 900, 3600, 10800, 21600];
+            $final = $att >= count($delays);
+            Db::update('outbox', ['status' => $final ? 'failed' : 'pending', 'attempts' => $att, 'last_error' => substr($e->getMessage(), 0, 500), 'next_attempt_utc' => Clock::utcPlus('+' . ($delays[$att - 1] ?? 21600) . ' seconds')], 'id = ?', [$m['id']]);
+            return 'failed';
+        }
     }
 
     public static function requeue(int $id): void
@@ -248,8 +261,7 @@ final class Jobs
     public static function run(string $via): array
     {
         $root = dirname(__DIR__, 2);
-        @mkdir($root . '/storage', 0775, true);
-        $lock = fopen($root . '/storage/cron.lock', 'c');
+        $lock = fopen(Config::dataDir() . '/cron.lock', 'c');
         if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) return ['skipped' => 'već radi'];
         $last = Settings::get('last_cron_utc');
         if ($last && strtotime($last . ' UTC') > strtotime(Clock::nowUtc() . ' UTC') - 60) return ['skipped' => 'pokrenuto prije manje od minute'];
@@ -259,9 +271,9 @@ final class Jobs
             $out = self::all();
             if ((int) Clock::now()->format('G') >= 3 && Settings::get('last_backup_day') !== Clock::today()) {
                 require_once $root . '/tools/backup-lib.php';
-                $f = Backup::dump($root . '/storage/backup');
+                $f = Backup::dump(Config::dataDir() . '/backup');
                 Settings::set('last_backup_day', Clock::today());
-                Backup::prune($root . '/storage/backup', 30);
+                Backup::prune(Config::dataDir() . '/backup', 30);
                 $out['backup'] = basename($f);
             }
             Settings::set('last_cron_error', '');

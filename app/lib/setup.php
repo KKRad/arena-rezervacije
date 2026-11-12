@@ -17,7 +17,7 @@ final class Setup
         $files = glob(Db::migrationsDir($root) . '/*.sql'); sort($files);
         foreach ($files as $f) {
             if (in_array(basename($f), $done, true)) continue;
-            $lock = fopen($root . '/storage/setup.lock', 'c');
+            $lock = fopen(Config::dataDir() . '/setup.lock', 'c');
             if (!flock($lock, LOCK_EX)) return;
             $done = Db::tableExists('schema_migrations') ? array_column(Db::all('SELECT name FROM schema_migrations'), 'name') : [];
             if (!in_array(basename($f), $done, true)) {

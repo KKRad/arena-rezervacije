@@ -52,6 +52,23 @@ function errBox(el, e) {
   el.innerHTML = h;
   $$('[data-open-res]', el).forEach((a) => (a.onclick = (ev) => { ev.preventDefault(); openReservation(+a.dataset.openRes); }));
 }
+// Vlastiti dijalozi umjesto confirm()/prompt() (rade isto na telefonu, ne blokiraju stranicu).
+function dialog(inner) {
+  return new Promise((resolve) => {
+    const d = document.createElement('div'); d.className = 'rs-modal'; d.style.zIndex = 70;
+    d.innerHTML = '<div class="box">' + inner + '</div>'; document.body.appendChild(d);
+    const done = (v) => { d.remove(); resolve(v); };
+    d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-no]')) done(null); if (e.target.closest('[data-yes]')) { const i = $('input,textarea', d); if (i && i.required && !i.value.trim()) { i.focus(); return; } done(i ? i.value.trim() : true); } });
+    d.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(null); if (e.key === 'Enter' && e.target.tagName === 'INPUT') $('[data-yes]', d).click(); });
+    setTimeout(() => ($('input', d) || $('[data-yes]', d)).focus(), 30);
+  });
+}
+const ask = (text, yes = 'Da') => dialog('<p style="white-space:pre-line">' + esc(text) + '</p><div class="btns"><button class="btn primary" data-yes>' + esc(yes) + '</button><button class="btn" data-no>Odustani</button></div>').then((v) => v === true);
+function askText(title, value = '') {
+  const isDate = /GGGG-MM-DD/.test(title), optional = /opciono/i.test(title);
+  const label = title.replace(/\s*\(GGGG-MM-DD[^)]*\)/, '').replace(/\s*\(opciono\)/i, '');
+  return dialog('<div class="field"><label>' + esc(label) + (optional ? ' <span class="rs-muted">(opciono)</span>' : '') + '</label><input ' + (isDate ? 'type="date" ' : '') + (optional ? '' : 'required ') + 'value="' + esc(value) + '"></div><div class="btns"><button class="btn primary" data-yes>U redu</button><button class="btn" data-no>Odustani</button></div>');
+}
 const val = (root, name) => { const el = $('[name="' + name + '"]', root); if (!el) return undefined; if (el.type === 'checkbox') return el.checked; return el.value; };
 
 // ============================================================ kalendar
@@ -196,6 +213,7 @@ function onFreeSlot(mode, d, lane, minute) {
 // ============================================================ rezervisanje (gost / član)
 function laneChips(selected) { return '<div class="chips" id="lane-chips">' + [1, 2, 3, 4, 5, 6].map((l) => '<button type="button" class="chip' + (selected.includes(l) ? ' on' : '') + '" data-l="' + l + '">S' + l + '</button>').join('') + '</div>'; }
 function bindChips(box, onChange) { $$('#lane-chips .chip', box).forEach((c) => (c.onclick = () => { if (c.disabled) return; c.classList.toggle('on'); onChange(); })); }
+function markLanes(box, free) { if (!free) return; $$('#lane-chips .chip', box).forEach((c) => { const busy = !free.includes(+c.dataset.l); c.disabled = busy && !c.classList.contains('on'); c.title = busy ? 'Zauzeto' : ''; c.classList.toggle('busy', busy); }); }
 const chosenLanes = (box) => $$('#lane-chips .chip.on', box).map((c) => +c.dataset.l);
 
 function coverageHtml(q) {
@@ -226,8 +244,8 @@ function guestBooking(date, time, lane) {
     };
     const quote = async () => {
       $('#e', box).innerHTML = '';
-      try { const q = await api('POST', 'reservations/quote', body()); $('#q', box).innerHTML = '<div class="note">Staze: ' + q.lanes.join(', ') + ' · ' + hm(q.start) + '–' + hm(q.end) + '</div>' + coverageHtml(q); $('#ok', box).disabled = false; }
-      catch (e) { $('#q', box).innerHTML = ''; errBox($('#e', box), e); $('#ok', box).disabled = true; }
+      try { const q = await api('POST', 'reservations/quote', body()); markLanes(box, q.free_lanes); $('#q', box).innerHTML = '<div class="note">Staze: ' + q.lanes.join(', ') + ' · ' + hm(q.start) + '–' + hm(q.end) + '</div>' + coverageHtml(q); $('#ok', box).disabled = false; }
+      catch (e) { $('#q', box).innerHTML = ''; markLanes(box, e.data && e.data.free); errBox($('#e', box), e); $('#ok', box).disabled = true; }
     };
     bindChips(box, quote);
     $$('select,input', box).forEach((x) => (x.onchange = quote));
@@ -282,7 +300,7 @@ function staffBooking(pre) {
     const quote = async () => {
       $('#e', box).innerHTML = ''; $('#q', box).innerHTML = '';
       if (isMatch()) return;
-      try { const q = await api('POST', 'reservations/quote', body()); $('#q', box).innerHTML = (q.cash_total != null || q.training ? coverageHtml(q) : ''); } catch (e) { errBox($('#e', box), e); }
+      try { const q = await api('POST', 'reservations/quote', body()); markLanes(box, q.free_lanes); $('#q', box).innerHTML = (q.cash_total != null || q.training ? coverageHtml(q) : ''); } catch (e) { markLanes(box, e.data && e.data.free); errBox($('#e', box), e); }
     };
     bindChips(box, quote);
     $('[name=category]', box).onchange = sync;
@@ -332,7 +350,7 @@ async function openReservation(id) {
       if (a === 'extend') modal('<h3>Produženje</h3><p>Produženje je moguće samo ako je staza slobodna.</p><div class="btns"><button class="btn" data-m="30">+30 min</button><button class="btn" data-m="60">+60 min</button></div><div id="e"></div>', (box, close) => {
         $$('[data-m]', box).forEach((x) => (x.onclick = async () => { try { await api('POST', 'reservations/' + id + '/extend', { add_minutes: +x.dataset.m }); close(); done('Termin produžen'); } catch (e) { errBox($('#e', box), e); } }));
       });
-      if (a === 'cancel') { if (confirm('Otkazati rezervaciju?' + (new Date(r.start_at.replace(' ', 'T')) - new Date() < 7200000 ? '\nNapomena: manje od 2 h prije početka — evidentira se kao kasno otkazivanje.' : ''))) act(() => api('POST', 'reservations/' + id + '/cancel', {}), 'Rezervacija otkazana'); }
+      if (a === 'cancel') (async () => { if (await ask('Otkazati rezervaciju?' + (new Date(r.start_at.replace(' ', 'T')) - new Date() < 7200000 ? '\nNapomena: manje od 2 h prije početka — evidentira se kao kasno otkazivanje.' : ''))) act(() => api('POST', 'reservations/' + id + '/cancel', {}), 'Rezervacija otkazana'); })();
       if (a === 'cancel_arena') modal('<h3>Otkaz od strane Arene</h3><p>Gost obavezno dobija obavijest. Korisnik mjesečne dobija 2× bonus sati za otkazane sate.</p><div class="field"><label>Razlog *</label><input name="reason" placeholder="npr. kvar staze, turnir"></div><div id="e"></div><button class="btn danger" id="ok">Otkaži termin</button>', (box, close) => {
         $('#ok', box).onclick = async () => { try { await api('POST', 'reservations/' + id + '/cancel', { kind: 'arena', reason: val(box, 'reason') }); close(); done('Otkazano od strane Arene'); } catch (e) { errBox($('#e', box), e); } };
       });
@@ -402,10 +420,10 @@ async function openEvent(id) {
   h += '<div id="pe"></div>';
   panel(h, (p) => {
     const reload = () => { S.reloadCal && S.reloadCal(); openEvent(id); };
-    $$('[data-add]', p).forEach((b) => (b.onclick = async () => { const [lane, start] = b.dataset.add.split('|'); const name = prompt('Ime i prezime igrača:'); if (!name) return; try { await api('POST', 'events/' + id + '/entries', { lane_id: +lane, start, player_name: name }); reload(); } catch (er) { errBox($('#pe', p), er); } }));
-    $$('[data-del]', p).forEach((b) => (b.onclick = async () => { if (!confirm('Ukloniti igrača?')) return; try { await api('POST', 'entries/' + b.dataset.del + '/delete', {}); reload(); } catch (er) { errBox($('#pe', p), er); } }));
+    $$('[data-add]', p).forEach((b) => (b.onclick = async () => { const [lane, start] = b.dataset.add.split('|'); const name = await askText('Ime i prezime igrača:'); if (!name) return; try { await api('POST', 'events/' + id + '/entries', { lane_id: +lane, start, player_name: name }); reload(); } catch (er) { errBox($('#pe', p), er); } }));
+    $$('[data-del]', p).forEach((b) => (b.onclick = async () => { if (!await ask('Ukloniti igrača?')) return; try { await api('POST', 'entries/' + b.dataset.del + '/delete', {}); reload(); } catch (er) { errBox($('#pe', p), er); } }));
     if ($('#add-t', p)) $('#add-t', p).onclick = async () => { const d = e.start_at.slice(0, 10); try { await api('POST', 'events/' + id + '/entries', { lane_id: +val(p, 'lane'), start: d + ' ' + val(p, 'from'), end: val(p, 'to') ? d + ' ' + val(p, 'to') : '', player_name: val(p, 'player') }); reload(); } catch (er) { errBox($('#pe', p), er); } };
-    if ($('#ev-cancel', p)) $('#ev-cancel', p).onclick = async () => { const why = prompt('Razlog otkazivanja događaja:'); if (!why) return; try { await api('POST', 'events/' + id + '/cancel', { reason: why }); closePanel(); S.reloadCal && S.reloadCal(); } catch (er) { errBox($('#pe', p), er); } };
+    if ($('#ev-cancel', p)) $('#ev-cancel', p).onclick = async () => { const why = await askText('Razlog otkazivanja događaja:'); if (!why) return; try { await api('POST', 'events/' + id + '/cancel', { reason: why }); closePanel(); S.reloadCal && S.reloadCal(); } catch (er) { errBox($('#pe', p), er); } };
   });
 }
 
@@ -450,6 +468,8 @@ function authForms(root) {
   const go = () => { location.href = back.startsWith('/') ? back : '/nalog/'; };
   root.innerHTML = '<div class="card" style="max-width:520px;margin:10px auto"><div class="tabs"><button data-t="login" class="active">Prijava</button><button data-t="reg">Registracija</button><button data-t="reset">Zaboravljena lozinka</button></div><div id="f"></div></div>';
   const f = $('#f', root);
+  // Nikad ne tvrditi da je SMS poslan ako nije (status dolazi sa servera nakon stvarnog pokušaja slanja).
+  const smsNote = (r, okText) => r.sms === 'sent' || (r.sms == null && !r.dev_code) ? '<p>' + okText + '</p>' : r.sms === 'not_configured' ? '<p class="rs-muted">SMS servis još nije povezan — poruka nije poslana.</p>' : r.sms === 'failed' ? '<div class="note bad">Slanje SMS-a trenutno nije uspjelo. Pokušajte ponovo za minut.</div>' : '';
   const devNote = (code) => code ? '<div class="note">Razvojni prikaz (SMS još nije povezan): kod je <b>' + esc(code) + '</b></div>' : '';
   const show = (t) => {
     $$('[data-t]', root).forEach((b) => b.classList.toggle('active', b.dataset.t === t));
@@ -463,7 +483,7 @@ function authForms(root) {
       $('#go', f).onclick = async () => {
         try {
           const r = await api('POST', 'auth/register', { first_name: val(f, 'first_name'), last_name: val(f, 'last_name'), phone: val(f, 'phone'), email: val(f, 'email'), password: val(f, 'password') });
-          f.innerHTML = '<p>Kod je poslan na ' + esc(r.phone) + '.</p>' + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric" autocomplete="one-time-code"></div><div id="e"></div><button class="btn primary" id="ok">Potvrdi telefon</button>';
+          f.innerHTML = smsNote(r, 'Kod je poslan SMS-om na ' + esc(r.phone) + '.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric" autocomplete="one-time-code"></div><div id="e"></div><button class="btn primary" id="ok">Potvrdi telefon</button>';
           $('#ok', f).onclick = async () => { try { await api('POST', 'auth/confirm', { phone: r.phone, code: val(f, 'code') }); go(); } catch (e) { errBox($('#e', f), e); } };
         } catch (e) { errBox($('#e', f), e); }
       };
@@ -473,7 +493,7 @@ function authForms(root) {
       $('#go', f).onclick = async () => {
         try {
           const r = await api('POST', 'auth/reset', { phone: val(f, 'phone') });
-          f.innerHTML = '<p>Ako je broj registrovan, kod je poslan.</p>' + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
+          f.innerHTML = smsNote(r, 'Ako je broj registrovan, kod je poslan SMS-om.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
           $('#ok', f).onclick = async () => { try { await api('POST', 'auth/reset-confirm', { phone: r.phone, code: val(f, 'code'), password: val(f, 'password') }); go(); } catch (e) { errBox($('#e', f), e); } };
         } catch (e) { errBox($('#e', f), e); }
       };
@@ -517,7 +537,9 @@ const ADMIN = {
       (d.unprocessed.length ? '<div class="note bad"><b>Neobrađeni termini:</b> ' + d.unprocessed.map((r) => '<a href="#" data-r="' + r.id + '">' + hDate(r.start_at) + ' ' + hm(r.start_at) + ' ' + esc(r.who || '') + '</a>').join(' · ') + '</div>' : '') +
       '<div class="btns" style="margin-bottom:8px">' + (can('res.write') ? '<button class="btn accent" id="newres">+ Rezervacija</button>' : '') + (can('events.birthday') ? '<button class="btn" id="newbd">+ Rođendan</button>' : '') + (can('events.manage') ? '<button class="btn" id="newm">+ Utakmica</button>' : '') + '</div><div id="calwrap"></div>';
     $$('[data-r]', v).forEach((a) => (a.onclick = (e) => { e.preventDefault(); openReservation(+a.dataset.r); }));
-    const pre = (cat) => ({ date: S.date || d.today, time: '18:00', lane: 1, category: cat });
+    // podrazumijevano: sljedeći puni sat danas (najkasnije 22:00), ili 18:00 za drugi dan
+    const nextHour = () => { const h = new Date().getHours() + 1; return pad(Math.min(22, Math.max(10, h))) + ':00'; };
+    const pre = (cat) => { const day = S.date || d.today; return { date: day, time: day === d.today ? nextHour() : '18:00', lane: 1, category: cat }; };
     if ($('#newres', v)) $('#newres', v).onclick = () => staffBooking(pre('recreation'));
     if ($('#newbd', v)) $('#newbd', v).onclick = () => staffBooking(pre('birthday'));
     if ($('#newm', v)) $('#newm', v).onclick = () => staffBooking(pre('match'));
@@ -542,7 +564,7 @@ const ADMIN = {
     $$('[data-fix]', v).forEach((b) => (b.onclick = () => modal('<h3>Ispravka uplate #' + b.dataset.fix + '</h3><p class="rs-small">Original ostaje; pravi se storno i (opciono) nova stavka. Autor i razlog se bilježe i šalju primaocima.</p><div class="field"><label>Ispravan iznos (KM, prazno = samo storno)</label><input name="amt"></div><div class="field"><label>Razlog *</label><input name="reason"></div><div id="e"></div><button class="btn primary" id="ok">Sačuvaj ispravku</button>', (box, close) => {
       $('#ok', box).onclick = async () => { try { await api('POST', 'payments/' + b.dataset.fix + '/correct', { new_amount: val(box, 'amt'), reason: val(box, 'reason') }); close(); ADMIN.dan(v); } catch (e) { errBox($('#e', box), e); } };
     })));
-    if ($('#close', v)) $('#close', v).onclick = async () => { if (!confirm('Zaključiti dan ' + hDate(d.date) + '?')) return; try { await api('POST', 'day/close', { date: d.date }); toast('Dan zaključen'); ADMIN.dan(v); } catch (e) { errBox($('#e', v), e); } };
+    if ($('#close', v)) $('#close', v).onclick = async () => { if (!await ask('Zaključiti dan ' + hDate(d.date) + '?')) return; try { await api('POST', 'day/close', { date: d.date }); toast('Dan zaključen'); ADMIN.dan(v); } catch (e) { errBox($('#e', v), e); } };
   },
 
   async zahtjevi(v) {
@@ -589,8 +611,8 @@ const ADMIN = {
       '<div class="card"><h3>Novi stalni termin</h3><div class="row"><div class="field"><label>Klub</label><select name="club_id">' + clubs.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('') + '</select></div><div class="field"><label>Dan</label><select name="weekday">' + [1, 2, 3, 4, 5, 6, 7].map((d) => '<option value="' + d + '">' + WD[d] + '</option>').join('') + '</select></div><div class="field"><label>Početak</label><input type="time" step="3600" name="start_time" value="19:00"></div><div class="field"><label>Trajanje (min)</label><input type="number" step="30" name="minutes" value="120"></div><div class="field"><label>Broj staza</label><input type="number" name="lane_count" value="2" min="1" max="6"></div><div class="field"><label>Željene staze (npr. 1,2)</label><input name="pref"></div><div class="field"><label>Od</label><input type="date" name="valid_from" value="' + new Date().toISOString().slice(0, 10) + '"></div><div class="field"><label>Do (prazno = dok se ne ukine)</label><input type="date" name="valid_to"></div></div><div id="e"></div><button class="btn primary" id="add">Dodaj i provjeri konflikte</button></div>';
     $('#add', v).onclick = async () => { try { const s = await api('POST', 'series', { club_id: +val(v, 'club_id'), weekday: +val(v, 'weekday'), start_time: val(v, 'start_time'), minutes: +val(v, 'minutes'), lane_count: +val(v, 'lane_count'), preferred_lanes: (val(v, 'pref') || '').split(',').map((x) => +x).filter(Boolean), valid_from: val(v, 'valid_from'), valid_to: val(v, 'valid_to') }); seriesDecide(+s.id, () => ADMIN.serije(v)); } catch (e) { errBox($('#e', v), e); } };
     $$('[data-d]', v).forEach((b) => (b.onclick = () => seriesDecide(+b.dataset.d, () => ADMIN.serije(v))));
-    $$('[data-end]', v).forEach((b) => (b.onclick = async () => { const d = prompt('Ukinuti od datuma (GGGG-MM-DD, uključivo):', new Date().toISOString().slice(0, 10)); if (!d) return; try { await api('POST', 'series/' + b.dataset.end + '/end', { from: d }); ADMIN.serije(v); } catch (e) { toast(e.message); } }));
-    $$('[data-skip]', v).forEach((b) => (b.onclick = async () => { const d = prompt('Preskočiti datum (GGGG-MM-DD):'); if (!d) return; try { await api('POST', 'series/' + b.dataset.skip + '/skip', { date: d, reason: 'Preskočeno' }); toast('Datum preskočen'); } catch (e) { toast(e.message); } }));
+    $$('[data-end]', v).forEach((b) => (b.onclick = async () => { const d = await askText('Ukinuti od datuma (GGGG-MM-DD, uključivo):', new Date().toISOString().slice(0, 10)); if (!d) return; try { await api('POST', 'series/' + b.dataset.end + '/end', { from: d }); ADMIN.serije(v); } catch (e) { toast(e.message); } }));
+    $$('[data-skip]', v).forEach((b) => (b.onclick = async () => { const d = await askText('Preskočiti datum (GGGG-MM-DD):'); if (!d) return; try { await api('POST', 'series/' + b.dataset.skip + '/skip', { date: d, reason: 'Preskočeno' }); toast('Datum preskočen'); } catch (e) { toast(e.message); } }));
   },
 
   async obracuni(v) {
@@ -604,7 +626,7 @@ const ADMIN = {
       '<div id="e"></div><button class="btn primary" id="mk"' + (items.length ? '' : ' disabled') + '>Napravi obračun</button><p class="rs-small rs-muted">Obuhvata sve održano i neobračunato do ovog trenutka; termin koji još traje ulazi tek nakon završetka. PDF se odmah šalje na email kluba.</p>' +
       '<h2>Arhiva obračuna</h2><ul class="list-plain">' + arch.map((s) => '<li>' + esc(s.number) + ' · ' + (s.kind === 'single_match' ? 'utakmica' : 'puni') + ' · ' + hDate(s.period_from) + '–' + hDate(s.period_to) + ' · <b>' + km(s.total_cents) + '</b> · <a href="/rezervacije/api/statements/' + s.id + '/pdf" target="_blank">PDF</a> <button class="btn sm" data-st="' + s.id + '">Detalji</button></li>').join('') + '</ul><div id="sd"></div>';
     $('#bc', v).onchange = (e) => { S.billClub = +e.target.value; ADMIN.obracuni(v); };
-    const mk = async (rid) => { if (!confirm(rid ? 'Napraviti izdvojeni obračun ove utakmice?' : 'Napraviti obračun za ' + km(total) + '?')) return; try { const s = await api('POST', 'statements', { club_id: club, reservation_id: rid || null }); toast('Obračun ' + s.number + ' napravljen' + (s.club_email ? ' · email u redu slanja' : ' · klub nema email')); ADMIN.obracuni(v); } catch (e) { errBox($('#e', v), e); } };
+    const mk = async (rid) => { if (!await ask(rid ? 'Napraviti izdvojeni obračun ove utakmice?' : 'Napraviti obračun za ' + km(total) + '?')) return; try { const s = await api('POST', 'statements', { club_id: club, reservation_id: rid || null }); toast('Obračun ' + s.number + ' napravljen' + (s.club_email ? ' · email u redu slanja' : ' · klub nema email')); ADMIN.obracuni(v); } catch (e) { errBox($('#e', v), e); } };
     $('#mk', v).onclick = () => mk(null);
     $$('[data-one]', v).forEach((b) => (b.onclick = () => mk(+b.dataset.one)));
     $$('[data-st]', v).forEach((b) => (b.onclick = async () => { const s = await api('GET', 'statements/' + b.dataset.st); $('#sd', v).innerHTML = '<div class="card"><h3>' + esc(s.number) + '</h3>' + s.items.map((i) => '<div class="sum"><span>' + hDate(i.item_date) + ' · ' + esc(i.description) + ' · ' + esc(i.unit_label) + '</span><span>' + km(i.amount_cents) + '</span></div>').join('') + '<div class="sum total"><span>Ukupno</span><span>' + km(s.total_cents) + '</span></div><p class="rs-small">Email: ' + (s.email_status ? esc({ pending: 'čeka slanje', sending: 'šalje se', sent: 'poslano ' + (s.email_status.sent_utc || ''), failed: 'neuspjelo', not_configured: 'NIJE poslano — kanal nije povezan' }[s.email_status.status]) : 'klub nema email') + '</p></div>'; }));
@@ -687,7 +709,7 @@ async function seriesDecide(id, after) {
     (c.dates.length ? '<div class="note">Datumi s konfliktom (nijedna druga staza nije slobodna). Postojeće rezervacije se nikad ne prepisuju — možete prihvatiti seriju uz preskakanje ovih datuma:</div><ul class="list-plain">' + c.dates.map((d) => '<li><label><input type="checkbox" name="skip" value="' + d.date + '" checked> ' + hDate(d.date) + '</label> <span class="rs-small rs-muted">' + esc(d.conflicts.join(', ')) + '</span></li>').join('') + '</ul>' : '<div class="note ok">Nema konflikata s postojećim rezervacijama.</div>') +
     '<div id="e"></div><div class="btns"><button class="btn primary" id="ap"' + (c.rule.length ? ' disabled' : '') + '>Odobri' + (c.dates.length ? ' uz preskakanje' : '') + '</button><button class="btn danger" id="rj">Odbij</button></div>', (box, close) => {
     $('#ap', box).onclick = async () => { try { await api('POST', 'series/' + id + '/approve', { skip_dates: $$('[name=skip]:checked', box).map((x) => x.value) }); close(); toast('Stalni termin odobren'); after && after(); } catch (e) { errBox($('#e', box), e); } };
-    $('#rj', box).onclick = async () => { const why = prompt('Razlog (opciono):') ?? ''; try { await api('POST', 'series/' + id + '/reject', { reason: why }); close(); after && after(); } catch (e) { errBox($('#e', box), e); } };
+    $('#rj', box).onclick = async () => { const why = (await askText('Razlog (opciono):')) ?? ''; try { await api('POST', 'series/' + id + '/reject', { reason: why }); close(); after && after(); } catch (e) { errBox($('#e', box), e); } };
   });
 }
 
@@ -712,13 +734,13 @@ async function userCard(id) {
     if ($('#bon', p)) $('#bon', p).onclick = () => modal('<h3>Bonus sati</h3><div class="field"><label>Minuta (+ dodjela, − oduzimanje; koraci 15)</label><input type="number" step="15" name="min" value="60"></div><div class="field"><label>Razlog *</label><input name="r"></div><div id="e"></div><button class="btn primary" id="ok">Sačuvaj</button>', (box, close) => {
       $('#ok', box).onclick = async () => { try { await api('POST', 'users/' + id + '/bonus', { minutes: +val(box, 'min'), reason: val(box, 'r') }); close(); re(); } catch (er) { errBox($('#e', box), er); } };
     });
-    if ($('#blk', p)) $('#blk', p).onclick = async () => { const r = prompt('Razlog blokade:'); if (!r) return; try { await api('POST', 'users/' + id + '/block', { reason: r }); re(); } catch (er) { errBox($('#pe', p), er); } };
+    if ($('#blk', p)) $('#blk', p).onclick = async () => { const r = await askText('Razlog blokade:'); if (!r) return; try { await api('POST', 'users/' + id + '/block', { reason: r }); re(); } catch (er) { errBox($('#pe', p), er); } };
     if ($('#unb', p)) $('#unb', p).onclick = async () => { await api('POST', 'users/' + id + '/unblock', {}); re(); };
     if ($('#edu', p)) $('#edu', p).onclick = () => modal('<h3>Podaci</h3><div class="row"><div class="field"><label>Ime</label><input name="f" value="' + esc(u.first_name) + '"></div><div class="field"><label>Prezime</label><input name="l" value="' + esc(u.last_name) + '"></div></div><div class="field"><label>Telefon</label><input name="ph" value="' + esc(u.phone_pretty) + '"></div><div class="field"><label>Email</label><input name="em" value="' + esc(u.email || '') + '"></div><div id="e"></div><button class="btn primary" id="ok">Sačuvaj</button>', (box, close) => {
       $('#ok', box).onclick = async () => { try { await api('POST', 'users/' + id + '/update', { first_name: val(box, 'f'), last_name: val(box, 'l'), phone: val(box, 'ph'), email: val(box, 'em') }); close(); re(); } catch (er) { errBox($('#e', box), er); } };
     });
-    $$('[data-pay]', p).forEach((b) => (b.onclick = async () => { if (!confirm('Naplatiti dug gotovinom?')) return; try { await api('POST', 'debts/' + b.dataset.pay + '/pay', {}); re(); } catch (er) { errBox($('#pe', p), er); } }));
-    $$('[data-fg]', p).forEach((b) => (b.onclick = async () => { const r = prompt('Razlog oprosta:'); if (!r) return; try { await api('POST', 'debts/' + b.dataset.fg + '/forgive', { reason: r }); re(); } catch (er) { errBox($('#pe', p), er); } }));
+    $$('[data-pay]', p).forEach((b) => (b.onclick = async () => { if (!await ask('Naplatiti dug gotovinom?')) return; try { await api('POST', 'debts/' + b.dataset.pay + '/pay', {}); re(); } catch (er) { errBox($('#pe', p), er); } }));
+    $$('[data-fg]', p).forEach((b) => (b.onclick = async () => { const r = await askText('Razlog oprosta:'); if (!r) return; try { await api('POST', 'debts/' + b.dataset.fg + '/forgive', { reason: r }); re(); } catch (er) { errBox($('#pe', p), er); } }));
     $$('[data-res]', p).forEach((b) => (b.onclick = () => openReservation(+b.dataset.res)));
   });
 }

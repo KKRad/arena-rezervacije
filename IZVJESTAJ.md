@@ -1,6 +1,6 @@
 # Sistem rezervacija Arene Bakarni — izvještaj revizije (12.11.2026)
 
-Proba: https://proba.brckoworldcup.com · Kod: `SAJTOVI/arena-rezervacije` · Ništa nije objavljeno na arenabrcko.com; dugme „Rezerviši stazu“ i dalje vodi na Sportin.
+Proba: https://aliceblue-eagle-979980.hostingersite.com (zaseban sajt; stara adresa proba.brckoworldcup.com zamijenjena) · Kod: `SAJTOVI/arena-rezervacije` · Ništa nije objavljeno na arenabrcko.com; dugme „Rezerviši stazu“ i dalje vodi na Sportin.
 Raniji izvještaj („sve završeno“) tretiran je kao tvrdnja i provjeren. Nađeni nedostaci su popravljeni (tačka 2).
 
 ## 1. Šta je provjereno i kojim dokazom
@@ -32,7 +32,8 @@ Dokazi: **T** = automatski test (`php tests/run.php` i `DB=sqlite php tests/run.
 | Produkcija: kod se ne prikazuje; registracija isključena dok SMS nije povezan i izričito uključen | **nedostajalo → dodano** | T |
 | Istovremene rezervacije iste staze | ✓ 4 procesa × 5 rundi: uvijek tačno jedan uspije (MySQL i SQLite) | T |
 | Backup: pravi se, preuzima i **vraća** u odvojeno okruženje | ✓ backup sa servera vraćen lokalno, integrity_check ok, aplikacija radi nad kopijom | S |
-| Nova objava probe ne briše podatke | ✓ podaci od 20.11. ostali nakon dvije objave | S |
+| Nova objava probe ne briše podatke | ✓ podaci od 20.11. ostali nakon objava (stara i nova proba) | S |
+| Proba na odvojenoj lokaciji (objava glavnog sajta je ne dira) | ✓ zaseban sajt na Premium paketu, podaci izvan web foldera | S |
 | Baza, postavke, backup nisu javni | ✓ 403 za config.php, storage/, app/, tools/; baza i backup izvan foldera sajta | S |
 
 ## 2. Šta je popravljeno (ova revizija)
@@ -52,7 +53,7 @@ Dokazi: **T** = automatski test (`php tests/run.php` i `DB=sqlite php tests/run.
 - Stvarno slanje SMS-a i emaila (kanali nisu odabrani); slanje je testirano samo do „nije poslano“ i ponovnih pokušaja.
 - MySQL na Hostingeru (proba radi na SQLite; MySQL je testiran lokalno na MariaDB 13).
 - Vizuelni izgled PDF-a u svim pregledačima (provjeren u jednom; tekst se ispisuje standardnim fontom, dijakritici linijama).
-- Objava glavnog sajta i dalje može obrisati **fajlove** probe (vidi tačku 5 i `docs/OBJAVA.md`); podaci ostaju jer su izvan foldera.
+- ~~Objava glavnog sajta može obrisati fajlove probe~~ — **riješeno**: proba je od 12.11.2026 zaseban sajt na drugom Hostinger paketu (Premium, besplatna adresa, bez DNS izmjene); podaci prebačeni, uloge 28/28 i oporavak backupa provjereni na novom sajtu.
 - Ručna provjera prijavljenih uloga u pregledniku urađena je lokalno (isti kod); na probnom sajtu prijavljene uloge provjerene su preko API-ja (lozinke se ne unose ručno u pregledač).
 
 ## 4. Preostale odluke vlasnika
@@ -62,7 +63,7 @@ Dokazi: **T** = automatski test (`php tests/run.php` i `DB=sqlite php tests/run.
 4. Produženje mjesečne prije isteka — implementirano po specifikaciji (novi period od dana uplate, preostali dani propadaju), uz upozorenje. Ostaje na vlasniku da li želi drugačije.
 5. Nedolazak na rođendan — prijedlog: bez automatskog duga.
 6. Baza na hostingu (MySQL) ili nastavak sa SQLite za probu.
-7. Odvojena lokacija probe (prijedlog u `docs/OBJAVA.md`).
+7. Gašenje ili preusmjeravanje stare probe (proba.brckoworldcup.com) i eventualna ljepša adresa za novu (npr. proba.arenabrcko.com — jedan DNS zapis).
 8. Datum objave na arenabrcko.com i prelaska dugmeta sa Sportina.
 
 ## 5. Uslovi prije produkcijske objave

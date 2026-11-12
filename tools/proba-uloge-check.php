@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Prijave iz PROBA-NALOZI.txt (lozinke se ne ispisuju). Pravi probne termine na zadani datum (podrazumijevano za 8 dana).
  */
 $root = dirname(__DIR__);
-$base = 'https://proba.brckoworldcup.com/rezervacije/api/';
+$base = rtrim(getenv('PROBA_URL') ?: 'https://aliceblue-eagle-979980.hostingersite.com', '/') . '/rezervacije/api/';
 $day = $argv[1] ?? date('Y-m-d', strtotime('+8 days'));
 $t = (string) file_get_contents("$root/PROBA-NALOZI.txt");
 preg_match_all('/^(\w+)\s+prijava: (\S+)\s+lozinka: (\S+)/m', $t, $mm, PREG_SET_ORDER);

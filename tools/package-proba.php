@@ -4,7 +4,15 @@
 // php tools/package-proba.php <db_name> <db_user>   — MySQL; lozinka baze se čita iz storage/proba-db-pass (nije u gitu)
 // Lozinke probnih naloga: nasumične, zapisuju se SAMO lokalno u PROBA-NALOZI.txt (nije u gitu); na server idu samo hash-evi.
 $root = dirname(__DIR__);
-[$_, $dbName, $dbUser] = $argv + [null, null, null];
+$opts = ['domain' => 'aliceblue-eagle-979980.hostingersite.com', 'root' => true, 'import' => null]; $pos = [];
+foreach (array_slice($argv, 1) as $a) {
+    if (preg_match('/^--domain=(.+)$/', $a, $m)) $opts['domain'] = $m[1];
+    elseif ($a === '--root') $opts['root'] = true;   // sajt je cijeli public_html (zaseban sajt) → podaci u domains/<sajt>/proba-data
+    elseif (preg_match('/^--import=(.+)$/', $a, $m)) $opts['import'] = $m[1];
+    else $pos[] = $a;
+}
+[$dbName, $dbUser] = $pos + [null, null];
+$up = $opts['root'] ? 1 : 2;   // koliko nivoa iznad foldera sajta je folder s podacima
 $sqlite = !$dbName;
 $pass = $sqlite ? '' : trim((string) @file_get_contents("$root/storage/proba-db-pass"));
 if (!$sqlite && (!$dbUser || $pass === '')) exit("Upotreba: php tools/package-proba.php [<db_name> <db_user>] (MySQL traži storage/proba-db-pass)\n");
@@ -22,9 +30,9 @@ $copy("$root/public/_rs", "$out/_rs");
 copy("$root/cron.php", "$out/cron.php");
 @mkdir("$out/assets/img", 0775, true);
 foreach (['logo-light.webp', 'favicon.png'] as $f) copy("$root/../arena-bakarni-site/assets/img/$f", "$out/assets/img/$f");
-$dbExport = $sqlite ? "['dsn' => 'sqlite:' . dirname(__DIR__, 2) . '/proba-data/arena-rs.sqlite', 'user' => null, 'pass' => null]"
+$dbExport = $sqlite ? "['dsn' => 'sqlite:' . dirname(__DIR__, $up) . '/proba-data/arena-rs.sqlite', 'user' => null, 'pass' => null]"
     : var_export(['dsn' => "mysql:host=127.0.0.1;port=3306;dbname=$dbName;charset=utf8mb4", 'user' => $dbUser, 'pass' => $pass], true);
-file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\n// Ako postoji ../../proba-data/config.php (izvan foldera sajta, npr. s lozinkom MySQL baze), koristi se ta datoteka.\nif (is_file(\$ext = dirname(__DIR__, 2) . '/proba-data/config.php')) return require \$ext;\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'data_dir' => dirname(__DIR__, 2) . '/proba-data',\n  'base_url' => 'https://proba.brckoworldcup.com', 'cookie_secure' => true, 'channels' => []];\n");
+file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\n// Ako postoji ../../proba-data/config.php (izvan foldera sajta, npr. s lozinkom MySQL baze), koristi se ta datoteka.\nif (is_file(\$ext = dirname(__DIR__, $up) . '/proba-data/config.php')) return require \$ext;\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'data_dir' => dirname(__DIR__, $up) . '/proba-data',\n  'base_url' => 'https://{$opts['domain']}', 'cookie_secure' => true, 'channels' => []];\n");
 $htDeny = "Require all denied\n";
 foreach (['app', 'migrations', 'tools', 'storage'] as $d) file_put_contents("$out/$d/.htaccess", $htDeny);
 file_put_contents("$out/.htaccess", <<<HT
@@ -67,6 +75,11 @@ function proba_archive(string $root, string $out): void {
     $z->close();
     echo "arhiva za vraćanje: build/archive/" . basename($zipPath) . "\n";
 }
+if ($opts['import']) {
+    if (!is_file($opts['import'])) exit("Nema datoteke za uvoz: {$opts['import']}\n");
+    copy($opts['import'], "$out/storage/import.sqlite.gz");
+    echo "uvoz postojeće probne baze: " . basename($opts['import']) . "\n";
+}
 $keep = "$root/storage/proba-seed.json";
 if (is_file($keep) && is_file("$root/PROBA-NALOZI.txt")) {
     copy($keep, "$out/storage/proba-seed.json");
@@ -74,7 +87,7 @@ if (is_file($keep) && is_file("$root/PROBA-NALOZI.txt")) {
     proba_archive($root, $out);
     exit;
 }
-$lines = ["PROBNI NALOZI — https://proba.brckoworldcup.com/nalog/  (samo probno okruženje; ne koristiti ove lozinke nigdje drugdje)", ''];
+$lines = ["PROBNI NALOZI — https://{$opts['domain']}/nalog/  (samo probno okruženje; ne koristiti ove lozinke nigdje drugdje)", ''];
 foreach ($accounts as &$a) {
     $pw = $gen();
     $a['hash'] = password_hash($pw, PASSWORD_DEFAULT);

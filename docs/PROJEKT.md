@@ -1,6 +1,6 @@
 # Sistem rezervacija Arene Bakarni — projektni dokument
 
-Verzija 2 · 12.11.2026 (revizija) · probno okruženje https://proba.brckoworldcup.com (ništa nije objavljeno na arenabrcko.com)
+Verzija 2 · 12.11.2026 (revizija) · probno okruženje https://aliceblue-eagle-979980.hostingersite.com (ništa nije objavljeno na arenabrcko.com)
 
 Sadržaj: 0. Tehnologija i hosting · 1. Stranice i tokovi · 2. Poslovna pravila (kako su implementirana) · 3. Matrica ovlaštenja · 4. Model baze · 5. Faze i kriteriji prihvatanja · 6. Otvorene odluke
 
@@ -255,6 +255,6 @@ Historija bilježi nalog koji je radnju napravio; za zajednički nalog piše „
 4. **Produženje mjesečne prije isteka.** Po specifikaciji: novi period počinje danom potvrđene uplate; preostali dani starog perioda ne prelaze u novi. Prije potvrde se prikazuje novi istek i upozorenje (obavezna potvrda). Pravilo nije mijenjano; alternativa ostaje odluka vlasnika.
 5. **Nedolazak na rođendan / utakmicu:** specifikacija propisuje dug samo za rekreaciju. *Podrazumijevano:* rođendan bez automatskog duga (osoblje može evidentirati ručno), utakmica/trening nemaju nedolazak.
 6. **Trajanje online rezervacije duže od 120 min:** *podrazumijevano* gost bira 60/90/120 (i produžava ako ima mjesta); osoblje može unijeti bilo koje trajanje u koracima od 30 min.
-7. **Objava:** proba radi na `proba.brckoworldcup.com` (arenabrcko.com je parkiran domen). Konačna objava na arenabrcko.com i prelazak dugmeta sa Sportina — tek uz odobrenje vlasnika.
-8. **Odvojena lokacija probe** (da objava glavnog sajta ne briše fajlove probe): prijedlog u `docs/OBJAVA.md` (zaseban sajt na postojećem Premium paketu ili nadogradnja).
+7. **Objava:** proba radi na `aliceblue-eagle-979980.hostingersite.com`. Konačna objava na arenabrcko.com i prelazak dugmeta sa Sportina — tek uz odobrenje vlasnika.
+8. **Proba:** od 12.11.2026 zaseban sajt https://aliceblue-eagle-979980.hostingersite.com (Premium paket). Otvoreno: gašenje stare probe i eventualna adresa proba.arenabrcko.com.
 9. **Baza na hostingu:** MySQL (preporuka za produkciju) ili SQLite (trenutno za probu).

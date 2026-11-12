@@ -7,6 +7,26 @@ declare(strict_types=1);
  */
 final class Setup
 {
+    /**
+     * Jednokratni uvoz baze pri selidbi probe: ako baza još ne postoji, a u paketu je storage/import.sqlite.gz
+     * (backup stare probe), raspakuje se na mjesto baze. Mora se pozvati prije prvog otvaranja baze.
+     */
+    public static function importIfNeeded(): void
+    {
+        if (Config::get('env') === 'prod') return;
+        $dsn = (string) Config::get('db.dsn', '');
+        if (!str_starts_with($dsn, 'sqlite:')) return;
+        $db = substr($dsn, 7);
+        $imp = dirname(__DIR__, 2) . '/storage/import.sqlite.gz';
+        if (is_file($db) || !is_file($imp)) return;
+        if (!is_dir(dirname($db))) @mkdir(dirname($db), 0770, true);
+        $data = gzdecode((string) file_get_contents($imp));
+        if ($data === false || !str_starts_with($data, 'SQLite format 3')) return;
+        file_put_contents($db . '.tmp', $data);
+        rename($db . '.tmp', $db);
+        @rename($imp, $imp . '.uvezeno');
+    }
+
     public static function ensure(): void
     {
         if (Config::get('env') === 'prod') return;

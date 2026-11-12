@@ -9,7 +9,7 @@ declare(strict_types=1);
  * Rezultat: storage/proba-backups/<backup>.sqlite.gz + izvještaj; produkcija/proba se NE mijenjaju.
  */
 $root = dirname(__DIR__);
-$base = 'https://proba.brckoworldcup.com/rezervacije/api/';
+$base = rtrim(getenv('PROBA_URL') ?: 'https://aliceblue-eagle-979980.hostingersite.com', '/') . '/rezervacije/api/';
 $dir = "$root/storage/proba-backups";
 @mkdir($dir, 0770, true);
 

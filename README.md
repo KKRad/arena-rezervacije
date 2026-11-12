@@ -1,6 +1,6 @@
 # Arena Bakarni — sistem rezervacija
 
-PHP 8 + MySQL/MariaDB (privremeno i SQLite — probno okruženje https://proba.brckoworldcup.com), bez okvira i bez Composer/npm zavisnosti. Front-end: čisti JavaScript (`public/_rs/assets/app.js`).
+PHP 8 + MySQL/MariaDB (privremeno i SQLite — probno okruženje https://aliceblue-eagle-979980.hostingersite.com), bez okvira i bez Composer/npm zavisnosti. Front-end: čisti JavaScript (`public/_rs/assets/app.js`).
 Projektni dokument (stranice, pravila, matrica ovlaštenja, model baze, faze, otvorene odluke): [docs/PROJEKT.md](docs/PROJEKT.md).
 Plan objave na arenabrcko.com: [docs/OBJAVA.md](docs/OBJAVA.md). Izvještaj za vlasnika: [IZVJESTAJ.md](IZVJESTAJ.md).
 

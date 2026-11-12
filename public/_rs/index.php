@@ -9,7 +9,7 @@ if (!class_exists('Api')) { http_response_code(500); exit('Aplikacija nije insta
 
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $prod = Config::get('env') === 'prod';
-if (Config::get('auto_setup')) Setup::ensure();
+if (Config::get('auto_setup')) { Setup::importIfNeeded(); Setup::ensure(); }
 if (!$prod) header('X-Robots-Tag: noindex, nofollow');
 
 header('X-Content-Type-Options: nosniff');

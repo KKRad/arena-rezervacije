@@ -1,6 +1,6 @@
 # Sistem rezervacija Arene Bakarni — projektni dokument
 
-Verzija 1 · 12.11.2026 · probno okruženje (ništa nije objavljeno)
+Verzija 2 · 12.11.2026 (revizija) · probno okruženje https://proba.brckoworldcup.com (ništa nije objavljeno na arenabrcko.com)
 
 Sadržaj: 0. Tehnologija i hosting · 1. Stranice i tokovi · 2. Poslovna pravila (kako su implementirana) · 3. Matrica ovlaštenja · 4. Model baze · 5. Faze i kriteriji prihvatanja · 6. Otvorene odluke
 
@@ -117,6 +117,8 @@ Tabela `price_versions`: svaka promjena pravi novu verziju; rezervacija pamti `p
 - Otkaz gosta: plan se oslobađa (sati se vraćaju u limit).
 - Bonus: bez isteka, važi i bez aktivne mjesečne, troši se tek kad nema redovnih sati, puna evidencija (dodjela, razlog, ko, potrošnja po rezervaciji). Ručnu dodjelu/oduzimanje radi ovlaštena osoba uz obavezan razlog.
 - Podsjetnici: 3 dana prije isteka i na dan isteka (jednom, ključ idempotentnosti).
+- Prije potvrde aktivacije ekran prikazuje novi period (od–do). Ako korisnik ima aktivnu mjesečnu (produženje prije isteka), prikazuje se upozorenje koliko dana prethodnog perioda propada i traži se izričita potvrda; server odbija aktivaciju bez nje.
+- **Nepokriveni dio termina uz mjesečnu/bonus** (otvorena odluka 3): iznos po započetih 30 min i opcioni minimum su **podesivi** u Cijenama (verzionisano). Trenutno: 7,50 KM / 30 min, bez minimuma. Primjeri: 2 h termin, 1,5 h iz mjesečne → 7,50 KM; 1,5 h termin, 30 min iz mjesečne → 15,00 KM; druga staza iste rezervacije ili staza bez ikakvog pokrića → obična rekreacija (najmanje 15 KM).
 
 ### 2.5 Klubovi, treninzi, serije
 - Korisnik je u najviše jednom klubu (`users.club_id`), uređuje vlasnik/menadžer.
@@ -125,6 +127,7 @@ Tabela `price_versions`: svaka promjena pravi novu verziju; rezervacija pamti `p
 - Stalni termin (`recurring_series`): pravilo (dan u sedmici, početak, trajanje, broj staza, željene staze, od datuma, do datuma ili otvoreno). Zahtjev igrača čeka odobrenje i ne čuva termin. Pri odobrenju sistem provjerava sve postojeće buduće rezervacije i blokade (konačan skup) i druga odobrena pravila; nudi listu konfliktnih datuma i opciju „Prihvati uz preskakanje ovih datuma“ (izuzeci).
 - Bez beskonačnih redova: pojave se upisuju kao stvarne rezervacije samo za prozor (danas + 8 sedmica, i na zahtjev kalendara za gledani datum). Za datume izvan prozora provjera dostupnosti uzima u obzir **virtualne pojave** pravila: nova rezervacija ne smije ostaviti manje slobodnih staza od broja staza koje pravilo traži. Pri upisu pojave, ako je željena staza zauzeta, dodjeljuje se druga slobodna.
 - Ukidanje: postavlja se krajnji datum; buduće pojave se otkazuju (zapis ostaje).
+- Pregled prije odobrenja prikazuje: datume s konfliktom (nijedna staza slobodna — mogu se preskočiti) i datume na kojima će sistem dodijeliti **zamjensku stazu**. „Pregled“ odobrene serije prikazuje upisane termine (zamjenska staza označena), preskočene datume s razlogom i do kada su termini upisani.
 
 ### 2.6 Dolazak, pokriće, naplata, dug
 Statusi su odvojeni: `status` (aktivna/otkazana), `attendance` (čeka/došao/nije došao), pokriće (`hour_allocations` + `charges`), gotovina (`payments`), klupski obračun (`club_statement_items`), obrada (`processed_at`).
@@ -145,7 +148,9 @@ Statusi su odvojeni: `status` (aktivna/otkazana), `attendance` (čeka/došao/nij
 
 ### 2.8 Dnevni obračun
 Jedan obračun po danu (nema smjena po konobaru). Gotovina dana = sve uplate upisane tog dana: Kuglanje (rekreacija, rođendani, ostaci uz mjesečnu), Patike, Mjesečne, Naplaćeni dugovi, Ispravke. Klupske vrijednosti prikazane odvojeno (nisu gotovina).
-Zaključenje je blokirano dok postoje: završeni neobrađeni termini (bez dolaska, ili došao bez pokrića), termini koji još traju, nerazriješene stavke. Lista prepreka sa direktnim otvaranjem. Nakon zaključenja snimak iznosa ostaje; kasnije ispravke idu u dan kada su napravljene uz referencu.
+Zaključenje je blokirano dok postoje **završeni** lični termini (rekreacija, mjesečna, rođendan) bez evidentiranog ishoda ili pokrića (bez dolaska, ili došao bez naplate). Lista prepreka sa direktnim otvaranjem.
+**Ne blokiraju:** budući i tekući termini (prikazani informativno) i klupski treninzi/utakmice (po završetku se sami evidentiraju klubu).
+Zaključeni dnevni obračun se nikad ne mijenja: uplata ili ispravka nakon zaključenja upisuje se u **prvi sljedeći nezaključeni dan** (ekran to navodi). Rezervacije se mogu unositi i mijenjati i na zaključeni dan — dan zaključava samo novac.
 
 ### 2.9 Obavijesti
 Primaoci (vlasnik unosi više brojeva i bira tipove), šabloni po tipu, red slanja, adapteri. Tipovi: nova rezervacija, otkaz (gost/osoblje), otkaz Arene (gostu obavezno), podsjetnik/istek mjesečne, zahtjevi, admin radnje, ispravka naplate i oprost duga (s autorom), neobrađen termin 1 h nakon kraja, verifikacioni kodovi, email obračuna kluba s PDF-om.
@@ -246,8 +251,10 @@ Historija bilježi nalog koji je radnju napravio; za zajednički nalog piše „
 
 1. **SMS servis za kodove i obavijesti.** Bez njega registracija i oporavak lozinke ne mogu raditi u produkciji. *Podrazumijevano:* razvojni prikaz poruka; prije objave odabrati dobavljača (npr. Infobip/Twilio za SMS; Viber/WhatsApp za obavijesti) — adapter je spreman.
 2. **Email za obračune klubova.** *Podrazumijevano:* SMTP sanduče na arenabrcko.com (npr. `obracuni@arenabrcko.com`, Hostinger mail); dok nije podešeno, email s PDF-om čeka u redu sa statusom „nije poslano“.
-3. **Ostatak preko mjesečne** (npr. 2 h rezervacija, 1,5 h pokriveno): *podrazumijevano* 7,50 KM po započetih 30 min, **bez** minimuma od 15 KM (minimum važi samo za stazu bez ikakvog pokrića).
-4. **Produženje mjesečne prije isteka.** Specifikacija: novi period počinje na dan uplate. *Podrazumijevano:* stari period se tog dana zatvara, novi počinje s punim sedmičnim limitom (preostali dani starog perioda propadaju). Alternativa: novi period počinje dan nakon isteka starog.
+3. **Nepokriveni dio termina uz mjesečnu** (npr. 2 h rezervacija, 1,5 h pokriveno): *implementirani prijedlog, NIJE potvrđena odluka vlasnika* — 7,50 KM po započetih 30 min, **bez** minimuma od 15 KM (minimum važi samo za stazu bez ikakvog pokrića). Podesivo u Cijenama (iznos i minimum); primjeri u 2.4.
+4. **Produženje mjesečne prije isteka.** Po specifikaciji: novi period počinje danom potvrđene uplate; preostali dani starog perioda ne prelaze u novi. Prije potvrde se prikazuje novi istek i upozorenje (obavezna potvrda). Pravilo nije mijenjano; alternativa ostaje odluka vlasnika.
 5. **Nedolazak na rođendan / utakmicu:** specifikacija propisuje dug samo za rekreaciju. *Podrazumijevano:* rođendan bez automatskog duga (osoblje može evidentirati ručno), utakmica/trening nemaju nedolazak.
 6. **Trajanje online rezervacije duže od 120 min:** *podrazumijevano* gost bira 60/90/120 (i produžava ako ima mjesta); osoblje može unijeti bilo koje trajanje u koracima od 30 min.
-7. **Objava:** probna poddomena (`proba.arenabrcko.com`) i konačna objava na arenabrcko.com — tek uz odobrenje vlasnika.
+7. **Objava:** proba radi na `proba.brckoworldcup.com` (arenabrcko.com je parkiran domen). Konačna objava na arenabrcko.com i prelazak dugmeta sa Sportina — tek uz odobrenje vlasnika.
+8. **Odvojena lokacija probe** (da objava glavnog sajta ne briše fajlove probe): prijedlog u `docs/OBJAVA.md` (zaseban sajt na postojećem Premium paketu ili nadogradnja).
+9. **Baza na hostingu:** MySQL (preporuka za produkciju) ili SQLite (trenutno za probu).

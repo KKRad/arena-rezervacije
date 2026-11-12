@@ -10,7 +10,7 @@ app/lib/        poslovna logika (core, auth, pricing+coverage, availability, res
 app/api.php     JSON API (/rezervacije/api/…) — svaka radnja provjerava ovlaštenje na serveru
 public/_rs/     ulaz (index.php) + CSS/JS — jedino što ide u public_html
 migrations/     SQL šema
-tests/run.php   automatski testovi (172 provjere)
+tests/run.php   automatski testovi (224 provjere; MySQL i DB=sqlite)
 tools/          migrate, create-owner, seed-dev (samo proba), backup/restore-check, dev-router
 cron.php        pozadinski poslovi (poruke, podsjetnici, neobrađeni termini, serije, dnevni backup)
 storage/        PDF obračuni, backup (izvan public_html, nije u gitu)
@@ -37,9 +37,18 @@ php tests/run.php
 ```
 Koristi zasebnu bazu `db_test` (briše je i pravi iznova). Ista provjera na SQLite (probno okruženje): `DB=sqlite php tests/run.php`. SQLite šema se generiše iz MySQL migracija: `python3 tools/mysql2sqlite.py`. Pokriva: konflikte i istovremeni upis, pravila online rezervacije, transakcije više staza, cijene i minimum, patike, mjesečne/VIP/sedmični limit/buduće rezervacije, bonus (2×, bez trostrukog odobravanja), nedolaske i dugove, oprost, storno, klubove i treninge, stalne termine (izuzeci, virtualne pojave, bez beskonačnih redova), obračune (11–13 u 12:00, izdvojena utakmica, sprečavanje dvostrukog obračuna, PDF, email u redu), turnire/kvalifikacije, rođendane, zabranu zaključivanja neriješenog dana, naloge (povezivanje profila, ograničenja pokušaja, oporavak), javnu privatnost, verziju cijene, red poruka, podsjetnike i statistiku.
 
+## Provjere na probnom sajtu
+```bash
+php tools/proba-uloge-check.php 2026-11-27
+```
+```bash
+php tools/proba-backup-check.php
+```
+Prva provjerava uloge i javni prikaz preko pravog API-ja probe; druga pravi backup na serveru, preuzima ga i vraća u odvojenu lokalnu bazu. Postupak objave i vraćanja: `docs/OBJAVA.md`.
+
 ## Cron (na serveru)
 ```bash
-*/5 * * * * php /home/u270359984/domains/brckoworldcup.com/arena-rezervacije/cron.php all
+*/5 * * * * wget -q -O /dev/null https://<domena>/rezervacije/api/cron   # CLI php cron na Single paketu ne radi
 ```
 
 ## Backup i provjera oporavka

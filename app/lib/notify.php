@@ -240,4 +240,37 @@ final class Jobs
         $out['outbox'] = Notify::work();
         return $out;
     }
+
+    /**
+     * Jedan prolaz pozadinskih poslova (CLI cron ili web-cron preko wget-a). Najviše jednom u 60 s;
+     * svi poslovi su idempotentni, pa prerano pokretanje ne pravi štetu. Backup jednom dnevno poslije 03:00.
+     */
+    public static function run(string $via): array
+    {
+        $root = dirname(__DIR__, 2);
+        @mkdir($root . '/storage', 0775, true);
+        $lock = fopen($root . '/storage/cron.lock', 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) return ['skipped' => 'već radi'];
+        $last = Settings::get('last_cron_utc');
+        if ($last && strtotime($last . ' UTC') > strtotime(Clock::nowUtc() . ' UTC') - 60) return ['skipped' => 'pokrenuto prije manje od minute'];
+        Settings::set('last_cron_utc', Clock::nowUtc());
+        Settings::set('last_cron_via', $via);
+        try {
+            $out = self::all();
+            if ((int) Clock::now()->format('G') >= 3 && Settings::get('last_backup_day') !== Clock::today()) {
+                require_once $root . '/tools/backup-lib.php';
+                $f = Backup::dump($root . '/storage/backup');
+                Settings::set('last_backup_day', Clock::today());
+                Backup::prune($root . '/storage/backup', 30);
+                $out['backup'] = basename($f);
+            }
+            Settings::set('last_cron_error', '');
+            return $out;
+        } catch (Throwable $e) {
+            Settings::set('last_cron_error', Clock::nowUtc() . ' ' . substr($e->getMessage(), 0, 300));
+            throw $e;
+        } finally {
+            flock($lock, LOCK_UN);
+        }
+    }
 }

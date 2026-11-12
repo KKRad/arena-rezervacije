@@ -43,6 +43,7 @@ final class Api
             case 'GET calendar/week': return Calendar::week((string) (($q['date'] ?? '') ?: Clock::today()), $this->mode(), $this->u);
             case 'GET events/:id': return Events::get($id, Perms::has($this->u, 'events.manage'));
             case 'GET clubs/public': return Clubs::all(false);
+            case 'GET cron': $r = Jobs::run('web'); return isset($r['skipped']) ? ['skipped' => $r['skipped']] : ['ok' => true];
 
             // ---------- nalog ----------
             case 'POST auth/register': return Auth::registerStart($in) + ['dev_code' => $this->devCode()];
@@ -267,6 +268,7 @@ final class Api
             'pending_requests' => count($req['monthly']) + count($req['series']),
             'day_closed' => DayClose::isClosed($today),
             'unsent_messages' => Perms::has($u, 'settings.manage') ? (int) Db::val("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','not_configured','failed')") : null,
+            'cron' => Perms::has($u, 'settings.manage') ? ['last_utc' => Settings::get('last_cron_utc'), 'via' => Settings::get('last_cron_via'), 'error' => Settings::get('last_cron_error')] : null,
         ];
     }
 

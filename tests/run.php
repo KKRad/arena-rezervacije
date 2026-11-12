@@ -504,6 +504,9 @@ test('Obavijesti: red, idempotentnost, „nije poslano“ bez kanala, ponovni po
     Clock::set('2026-11-16 20:05:00');
     Jobs::unprocessedReminders(); Jobs::unprocessedReminders();
     eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'unprocessed'"), 1, 'neobrađen termin 1 h nakon kraja — jednom');
+    ok(!isset(Jobs::run('test')['skipped']), 'cron prolaz radi');
+    eq(Jobs::run('test')['skipped'] ?? null, 'pokrenuto prije manje od minute', 'web-cron: najviše jednom u minuti');
+    eq((new Api(null))->handle('GET', 'cron', [], [])[1]['data'], ['skipped' => 'pokrenuto prije manje od minute'], 'javni web-cron ne otkriva podatke');
 });
 
 test('Podsjetnici mjesečne', function () {

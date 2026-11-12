@@ -178,8 +178,8 @@ final class Coverage
     {
         $pre = self::activationPreview($userId);
         if ($pre['current'] && !$confirmEarly) {
-            throw new AppError('Korisnik ima aktivnu mjesečnu do ' . T::humanDate($pre['current']['last_day']) . '. Novi period bi trajao od ' . T::humanDate($pre['start']) . ' do ' . T::humanDate($pre['last_day'])
-                . '; preostalih ' . $pre['current']['lost_days'] . ' dana prethodnog perioda NE prelazi u novi. Potvrdite produženje.', 409, ['preview' => $pre, 'needs_confirm' => true]);
+            throw new AppError('Korisnik ima aktivnu mjesečnu do ' . T::humanDate($pre['current']['last_day']) . ' Novi period bi trajao od ' . T::humanDate($pre['start']) . ' do ' . T::humanDate($pre['last_day'])
+                . ' — preostalih ' . $pre['current']['lost_days'] . ' dana prethodnog perioda NE prelazi u novi. Potvrdite produženje.', 409, ['preview' => $pre, 'needs_confirm' => true]);
         }
         return Db::tx(function () use ($userId, $kind, $weeklyMinutes, $by) {
             $u = Db::one('SELECT * FROM users WHERE id = ? FOR UPDATE', [$userId]);

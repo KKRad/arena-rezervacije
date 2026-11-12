@@ -105,7 +105,7 @@ function renderCalendar(el, data, opts) {
       const narrow = innerWidth < 760;
       const l1 = narrow ? (b.short + ' ' + hm(b.start_at)) : b.label;
       const l2 = narrow ? (b.who ? b.who.split(' ')[0] : (b.mine ? 'Vaše' : '')) : (hm(b.start_at) + '–' + hm(b.end_at) + (b.who ? ' · ' + b.who : '') + (b.sub ? ' · ' + b.sub : '') + (b.mine ? ' · Vaša rezervacija' : ''));
-      btn.innerHTML = '<span class="l1">' + esc(l1) + '</span>' + (ht > 2 * R ? '<span class="l2">' + esc(l2) + '</span>' : '') + (b.state && staffMode ? '<span class="badge" title="' + STATE[b.state][1] + '">' + STATE[b.state][0] + '</span>' : '');
+      if (b.positions) btn.innerHTML = ''; else btn.innerHTML = '<span class="l1">' + esc(l1) + '</span>' + (ht > 2 * R ? '<span class="l2">' + esc(l2) + '</span>' : '') + (b.state && staffMode ? '<span class="badge" title="' + STATE[b.state][1] + '">' + STATE[b.state][0] + '</span>' : '');
       btn.title = b.label + ' ' + hm(b.start_at) + '–' + hm(b.end_at);
       btn.onclick = (e) => { e.stopPropagation(); opts.onBlock && opts.onBlock(b); };
       col.appendChild(btn);
@@ -184,7 +184,7 @@ async function calendarView(root, mode) {
       $('#cal-date', root).value = d.date;
       renderCalendar(body, d, {
         mode,
-        onBlock: (b) => (b.type === 'event' ? openEvent(b.id) : (mode !== 'staff' && !b.mine ? toast(b.label + ' · ' + hm(b.start_at) + '–' + hm(b.end_at)) : openReservation(b.id))),
+        onBlock: (b) => (b.type === 'event' ? openEvent(b.id) : (mode !== 'staff' && !b.mine ? publicDetail(b) : openReservation(b.id))),
         onFree: (lane, minute) => onFreeSlot(mode, d, lane, minute),
       });
       $('#cal-legend', root).innerHTML = legend(d.categories);
@@ -202,6 +202,13 @@ async function calendarView(root, mode) {
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => S.view === 'day' && S.cal && load(), 250); });
   S.reloadCal = load;
   await load();
+}
+
+// Javni detail tuđeg termina: samo ono što je javno (kategorija, klubovi/liga kod utakmice, vrijeme, staze).
+function publicDetail(b) {
+  panel('<h3><span class="tag" style="background:' + b.color + ';color:#fff">' + esc(b.short === 'UT' ? 'Utakmica' : b.label) + '</span></h3><div class="kv">' +
+    (b.short === 'UT' ? '<div>Utakmica</div><div>' + esc(b.label) + (b.sub ? '<br>' + esc(b.sub) : '') + '</div>' : '') +
+    '<div>Vrijeme</div><div>' + hDate(b.start_at) + ' ' + hm(b.start_at) + '–' + hm(b.end_at) + '</div><div>Staze</div><div>' + b.lanes.join(', ') + '</div></div><p class="rs-small rs-muted">Termin je zauzet.</p>');
 }
 
 function onFreeSlot(mode, d, lane, minute) {
@@ -738,7 +745,7 @@ async function userCard(id) {
   panel(h, (p) => {
     const re = () => userCard(id);
     if ($('#uclub', p)) $('#uclub', p).onchange = async (e) => { try { await api('POST', 'users/' + id + '/club', { club_id: e.target.value || null }); toast('Članstvo sačuvano'); } catch (er) { errBox($('#pe', p), er); } };
-    if ($('#act', p)) $('#act', p).onclick = async () => { const pv = await api('GET', 'users/' + id + '/monthly-preview'); modal('<h3>Aktivacija mjesečne (' + km(pv.amount_cents) + ' gotovina)</h3><div class="note' + (pv.current ? ' bad' : ' ok') + '">Novi period: <b>' + hDate(pv.start) + ' – ' + hDate(pv.last_day) + '</b> (počinje danom uplate).' + (pv.current ? '<br><b>Upozorenje:</b> postojeća mjesečna važi do ' + hDate(pv.current.last_day) + '. Preostalih <b>' + pv.current.lost_days + ' dana NE prelazi</b> u novi period.' : '') + '</div>' + (pv.current ? '<label class="rs-small"><input type="checkbox" name="early"> Razumijem — preostali dani prethodnog perioda propadaju</label>' : '') + '<div class="field"><label>Vrsta</label><select name="kind"><option value="standard">Standardna — 2 h sedmično</option>' + (can('monthly.vip') ? '<option value="vip">VIP — sati po dogovoru</option>' : '') + '</select></div><div class="field" id="vh" hidden><label>VIP sedmični sati (min)</label><input type="number" step="15" name="wm" value="180"></div><div id="e"></div><button class="btn accent" id="ok">Gotovina primljena — aktiviraj</button>', (box, close) => {
+    if ($('#act', p)) $('#act', p).onclick = async () => { const pv = await api('GET', 'users/' + id + '/monthly-preview'); modal('<h3>Aktivacija mjesečne (' + km(pv.amount_cents) + ' gotovina)</h3><div class="note' + (pv.current ? ' bad' : ' ok') + '">Novi period: <b>' + hDate(pv.start) + ' – ' + hDate(pv.last_day) + '</b> (počinje danom uplate).' + (pv.current ? '<br><b>Upozorenje:</b> postojeća mjesečna važi do ' + hDate(pv.current.last_day) + ' — preostalih <b>' + pv.current.lost_days + ' dana NE prelazi</b> u novi period.' : '') + '</div>' + (pv.current ? '<label class="rs-small"><input type="checkbox" name="early"> Razumijem — preostali dani prethodnog perioda propadaju</label>' : '') + '<div class="field"><label>Vrsta</label><select name="kind"><option value="standard">Standardna — 2 h sedmično</option>' + (can('monthly.vip') ? '<option value="vip">VIP — sati po dogovoru</option>' : '') + '</select></div><div class="field" id="vh" hidden><label>VIP sedmični sati (min)</label><input type="number" step="15" name="wm" value="180"></div><div id="e"></div><button class="btn accent" id="ok">Gotovina primljena — aktiviraj</button>', (box, close) => {
       $('[name=kind]', box).onchange = () => ($('#vh', box).hidden = val(box, 'kind') !== 'vip');
       $('#ok', box).onclick = async () => { if (pv.current && !val(box, 'early')) { $('#e', box).innerHTML = '<div class="err">Potvrdite da ste upozorili korisnika da preostali dani propadaju.</div>'; return; } try { await api('POST', 'users/' + id + '/monthly', { kind: val(box, 'kind'), weekly_minutes: +val(box, 'wm'), confirm_early: !!val(box, 'early') }); close(); toast('Mjesečna aktivirana do ' + hDate(pv.last_day)); re(); } catch (er) { errBox($('#e', box), er); } };
     }); };

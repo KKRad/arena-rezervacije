@@ -3,6 +3,7 @@ declare(strict_types=1);
 /**
  * Provjera backupa probnog okruženja (pravi backup na serveru, preuzima ga i VRAĆA u odvojeno lokalno okruženje).
  *   php tools/proba-backup-check.php            — napravi novi backup na serveru, preuzmi ga i provjeri
+ *   php tools/proba-backup-check.php --preuzmi <ime-backupa>   — preuzmi postojeći backup sa servera i provjeri ga
  *   php tools/proba-backup-check.php --samo-provjera <datoteka.sqlite.gz>
  * Prijava: vlasnički probni nalog iz PROBA-NALOZI.txt (lozinka se ne ispisuje).
  * Rezultat: storage/proba-backups/<backup>.sqlite.gz + izvještaj; produkcija/proba se NE mijenjaju.
@@ -27,7 +28,8 @@ if (($argv[1] ?? '') === '--samo-provjera') {
     };
     $l = $req('POST', 'auth/login', ['login' => $m[1], 'password' => $m[2]]);
     if (empty($l['ok'])) exit('Prijava nije uspjela: ' . ($l['error'] ?? '?') . "\n");
-    $run = $req('POST', 'backup/run', []);
+    if (($argv[1] ?? '') === '--preuzmi') $run = ['ok' => true, 'data' => ['file' => basename((string) ($argv[2] ?? '')), 'bytes' => '?']];
+    else $run = $req('POST', 'backup/run', []);
     if (empty($run['ok'])) exit('Backup na serveru nije uspio: ' . ($run['error'] ?? '?') . "\n");
     echo "Backup na serveru: {$run['data']['file']} ({$run['data']['bytes']} B)\n";
     $list = $req('GET', 'backup/list');

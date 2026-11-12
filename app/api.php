@@ -124,7 +124,7 @@ final class Api
             case 'POST entries/:id/delete': Events::removeEntry($this->me(), $id); return null;
 
             // ---------- novac, dan ----------
-            case 'GET day': $this->staff('day.view'); $d = (string) ($q['date'] ?? Clock::today()); return ['date' => $d, 'closed' => Db::one('SELECT d.*, TRIM(CONCAT(u.first_name," ",u.last_name)) by_name FROM day_closes d LEFT JOIN users u ON u.id = d.closed_by WHERE day = ?', [$d]), 'totals' => DayClose::totals($d), 'blockers' => DayClose::blockers($d)];
+            case 'GET day': $this->staff('day.view'); $d = (string) ($q['date'] ?? Clock::today()); return ['date' => $d, 'closed' => Db::one('SELECT d.*, TRIM(CONCAT(u.first_name,\' \',u.last_name)) by_name FROM day_closes d LEFT JOIN users u ON u.id = d.closed_by WHERE day = ?', [$d]), 'totals' => DayClose::totals($d), 'blockers' => DayClose::blockers($d)];
             case 'POST day/close': return DayClose::close($this->me(), (string) ($in['date'] ?? Clock::today()));
             case 'POST payments/:id/correct': return Cash::correct($this->me(), $id, isset($in['new_amount']) && $in['new_amount'] !== '' ? Money::parse((string) $in['new_amount']) : null, (string) ($in['reason'] ?? ''));
             case 'POST debts/:id/forgive': Cash::forgiveDebt($this->me(), $id, (string) ($in['reason'] ?? '')); return null;

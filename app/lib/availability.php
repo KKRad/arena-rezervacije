@@ -91,7 +91,7 @@ final class Availability
         try {
             Db::q('INSERT INTO lane_slots (lane_id, slot_start, reservation_id, event_id) VALUES ' . implode(',', $vals), $p);
         } catch (PDOException $e) {
-            if ((int) ($e->errorInfo[1] ?? 0) === 1062) throw new AppError('Termin je upravo zauzet. Osvježite kalendar i izaberite drugi termin.', 409);
+            if (Db::isDuplicate($e)) throw new AppError('Termin je upravo zauzet. Osvježite kalendar i izaberite drugi termin.', 409);
             throw $e;
         }
     }

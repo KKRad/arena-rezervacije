@@ -1,9 +1,13 @@
 <?php
 declare(strict_types=1);
-// Pokretanje: php tests/run.php   (koristi bazu db_test iz config.local.php — briše je i pravi iznova)
+// Pokretanje: php tests/run.php          — MySQL baza db_test iz config.local.php (briše je i pravi iznova)
+//             DB=sqlite php tests/run.php — ista provjera na SQLite (privremeno/probno okruženje)
 
 require __DIR__ . '/../app/bootstrap.php';
-Config::load((function () { $c = require __DIR__ . '/../config.local.php'; $c['db'] = $c['db_test']; $c['env'] = 'test'; $c['channels'] = []; return $c; })());
+define('SQLITE_TEST', getenv('DB') === 'sqlite');
+define('SQLITE_FILE', sys_get_temp_dir() . '/arena-rs-test.sqlite');
+Config::load((function () { $c = require __DIR__ . '/../config.local.php'; $c['db'] = SQLITE_TEST ? ['dsn' => 'sqlite:' . SQLITE_FILE, 'user' => null, 'pass' => null] : $c['db_test']; $c['env'] = 'test'; $c['channels'] = []; return $c; })());
+echo 'Baza: ' . (SQLITE_TEST ? 'SQLite' : 'MySQL') . "\n";
 Db::connect(Config::get('db'));
 
 $GLOBALS['pass'] = 0; $GLOBALS['fail'] = [];
@@ -16,6 +20,12 @@ function throws(callable $f, string $msg, ?string $contains = null): ?AppError
 }
 function reset_db(): void
 {
+    if (SQLITE_TEST) {
+        foreach (['', '-wal', '-shm'] as $x) @unlink(SQLITE_FILE . $x);
+        Db::connect(Config::get('db'));
+        Db::pdo()->exec(file_get_contents(__DIR__ . '/../migrations/sqlite/001_init.sql'));
+        return;
+    }
     $pdo = Db::pdo();
     $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
     foreach ($pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $t) $pdo->exec("DROP TABLE `$t`");
@@ -112,6 +122,15 @@ test('Pravila online rezervacije i konflikti', function () {
 
 test('Istovremeni upis: zaključavanje dana (druga konekcija čeka)', function () {
     $c = Config::get('db');
+    if (SQLITE_TEST) {
+        $other = new PDO($c['dsn'], null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 1]);
+        $blocked = false;
+        Db::pdo()->exec('BEGIN IMMEDIATE'); Db::lockDay('2026-11-20');
+        try { $other->exec('BEGIN IMMEDIATE'); } catch (PDOException $e) { $blocked = str_contains($e->getMessage(), 'locked'); }
+        Db::pdo()->exec('ROLLBACK');
+        ok($blocked, 'druga transakcija ne može upisivati dok prva traje (SQLite)');
+        return;
+    }
     $other = new PDO($c['dsn'], $c['user'], $c['pass'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $other->exec('SET SESSION innodb_lock_wait_timeout = 1');
     Db::pdo()->beginTransaction();
@@ -328,7 +347,7 @@ test('Klubovi: trening na račun kluba, utakmica, obračun', function () {
     throws(fn() => Statements::create($o, $rad), 'novi zbir počinje od nule', 'Nema');
     $dup = false;
     try { Db::insert('club_statement_items', ['statement_id' => $full['id'], 'reservation_id' => $t['id'], 'item_date' => '2026-11-16', 'description' => 'x', 'lane_count' => 1, 'minutes' => 60, 'unit_label' => 'x', 'amount_cents' => 1]); }
-    catch (PDOException $e) { $dup = (int) $e->errorInfo[1] === 1062; }
+    catch (PDOException $e) { $dup = Db::isDuplicate($e); }
     ok($dup, 'baza odbija dvostruki obračun iste stavke (UNIQUE)');
     eq(count(Statements::list($rad)), 2, 'arhiva obračuna');
     eq((bool) Db::val('SELECT processed_utc FROM reservations WHERE id = ?', [$t['id']]), false, 'trening ne treba ručnu obradu');

@@ -2,12 +2,15 @@
 declare(strict_types=1);
 // Ulaz aplikacije. Na serveru: public_html/_rs/index.php, kod u ../../arena-rezervacije (izvan public_html).
 
-$candidates = [dirname(__DIR__, 2) . '/app/bootstrap.php', dirname(__DIR__, 2) . '/arena-rezervacije/app/bootstrap.php'];
+// lokalno: projekat/public/_rs · produkcija: kod izvan public_html · probna poddomena: kod u korijenu poddomene (zaštićen .htaccess-om)
+$candidates = [dirname(__DIR__, 2) . '/app/bootstrap.php', dirname(__DIR__, 2) . '/arena-rezervacije/app/bootstrap.php', dirname(__DIR__) . '/app/bootstrap.php'];
 foreach ($candidates as $c) if (is_file($c)) { require $c; break; }
 if (!class_exists('Api')) { http_response_code(500); exit('Aplikacija nije instalirana.'); }
 
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $prod = Config::get('env') === 'prod';
+if (Config::get('auto_setup')) Setup::ensure();
+if (!$prod) header('X-Robots-Tag: noindex, nofollow');
 
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
@@ -51,7 +54,8 @@ foreach ($pages as $prefix => [$page, $title]) {
         header('Content-Type: text/html; charset=utf-8');
         header('Cache-Control: no-cache');
         $v = substr(md5((string) @filemtime(__DIR__ . '/assets/app.js') . @filemtime(__DIR__ . '/assets/app.css')), 0, 8);
-        $robots = $page === 'public' ? 'index,follow' : 'noindex,nofollow';
+        $robots = $page === 'public' && $prod ? 'index,follow' : 'noindex,nofollow';
+        $banner = $prod ? '' : '<div class="rs-proba">PROBNO OKRUŽENJE — podaci nisu stvarni, SMS se ne šalje (kod se prikazuje na ekranu)</div>';
         echo <<<HTML
 <!doctype html>
 <html lang="sr-Latn">
@@ -64,6 +68,7 @@ foreach ($pages as $prefix => [$page, $title]) {
 <link rel="stylesheet" href="/_rs/assets/app.css?v=$v">
 </head>
 <body data-page="$page">
+$banner
 <header class="rs-top">
   <a class="rs-brand" href="/"><img src="/assets/img/logo-light.webp" alt="Arena Bakarni" width="120" height="59"></a>
   <nav class="rs-nav">

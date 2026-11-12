@@ -1,6 +1,6 @@
 # Arena Bakarni — sistem rezervacija
 
-PHP 8 + MySQL/MariaDB, bez okvira i bez Composer/npm zavisnosti. Front-end: čisti JavaScript (`public/_rs/assets/app.js`).
+PHP 8 + MySQL/MariaDB (privremeno i SQLite — probno okruženje https://proba.brckoworldcup.com), bez okvira i bez Composer/npm zavisnosti. Front-end: čisti JavaScript (`public/_rs/assets/app.js`).
 Projektni dokument (stranice, pravila, matrica ovlaštenja, model baze, faze, otvorene odluke): [docs/PROJEKT.md](docs/PROJEKT.md).
 Plan objave na arenabrcko.com: [docs/OBJAVA.md](docs/OBJAVA.md). Izvještaj za vlasnika: [IZVJESTAJ.md](IZVJESTAJ.md).
 
@@ -35,7 +35,7 @@ Dok SMS nije povezan, verifikacioni kod se u probnom okruženju prikazuje na ekr
 ```bash
 php tests/run.php
 ```
-Koristi zasebnu bazu `db_test` (briše je i pravi iznova). Pokriva: konflikte i istovremeni upis, pravila online rezervacije, transakcije više staza, cijene i minimum, patike, mjesečne/VIP/sedmični limit/buduće rezervacije, bonus (2×, bez trostrukog odobravanja), nedolaske i dugove, oprost, storno, klubove i treninge, stalne termine (izuzeci, virtualne pojave, bez beskonačnih redova), obračune (11–13 u 12:00, izdvojena utakmica, sprečavanje dvostrukog obračuna, PDF, email u redu), turnire/kvalifikacije, rođendane, zabranu zaključivanja neriješenog dana, naloge (povezivanje profila, ograničenja pokušaja, oporavak), javnu privatnost, verziju cijene, red poruka, podsjetnike i statistiku.
+Koristi zasebnu bazu `db_test` (briše je i pravi iznova). Ista provjera na SQLite (probno okruženje): `DB=sqlite php tests/run.php`. SQLite šema se generiše iz MySQL migracija: `python3 tools/mysql2sqlite.py`. Pokriva: konflikte i istovremeni upis, pravila online rezervacije, transakcije više staza, cijene i minimum, patike, mjesečne/VIP/sedmični limit/buduće rezervacije, bonus (2×, bez trostrukog odobravanja), nedolaske i dugove, oprost, storno, klubove i treninge, stalne termine (izuzeci, virtualne pojave, bez beskonačnih redova), obračune (11–13 u 12:00, izdvojena utakmica, sprečavanje dvostrukog obračuna, PDF, email u redu), turnire/kvalifikacije, rođendane, zabranu zaključivanja neriješenog dana, naloge (povezivanje profila, ograničenja pokušaja, oporavak), javnu privatnost, verziju cijene, red poruka, podsjetnike i statistiku.
 
 ## Cron (na serveru)
 ```bash

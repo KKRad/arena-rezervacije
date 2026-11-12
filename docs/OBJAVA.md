@@ -21,5 +21,11 @@ Ako se kasnije pokaže potreba za više resursa: nadogradnja na Business paket i
 8. **Provjera na produkciji:** registracija sa stvarnim SMS-om, rezervacija, naplata, zaključenje dana, obračun kluba s emailom; `php tools/restore-check.php` na zasebnoj bazi.
 9. **Prelazak sa Sportina:** tek kad vlasnik odobri — dugme „Rezerviši stazu“ u zaglavlju sajta (`src/partials/header.html`) preusmjeriti na `/rezervacije/`, dodati link u meni i podnožje, dodati `/rezervacije/` u sitemap.
 
-## Probno okruženje na serveru (opciono)
-Poddomena `proba.arenabrcko.com` sa zasebnom bazom i `env => 'dev'` (kod se vidi na ekranu, SMS se ne šalje). Pravi se tek uz odobrenje.
+## Probno okruženje (POSTAVLJENO 12.11.2026)
+- Adresa: **https://proba.brckoworldcup.com** (poddomena sajta brckoworldcup.com, folder `public_html/proba-rezervacije`). arenabrcko.com nije moguć jer je parkiran domen (Single paket = jedan sajt).
+- Baza: privremeno **SQLite** datoteka `storage/arena-rs.sqlite` (vlasnik još odlučuje o MySQL bazi na hostingu). Prelazak na MySQL: `php tools/package-proba.php <baza> <korisnik>` + `tools/set-proba-db-pass.sh`.
+- Paket: `php tools/package-proba.php` → `build/proba/` → Hostinger deploy samo na proba.brckoworldcup.com. Svaki novi paket pravi nove probne lozinke (`PROBA-NALOZI.txt`, lokalno) — postojeća baza ih ne mijenja; ponovni deploy ne briše `storage/arena-rs.sqlite` samo ako ga deploy ne prepiše (prije deploya napraviti backup).
+- Zaštita: `.htaccess` odbija app/, storage/, migrations/, tools/, config.php (provjereno: 403); noindex; žuta traka „PROBNO OKRUŽENJE“; kod se prikazuje na ekranu (SMS se ne šalje).
+- Cron (obavijesti, podsjetnici, dnevni backup) NIJE postavljen — dodaje vlasnik u hPanel → Napredno → Cron poslovi:
+  `*/5 * * * *  cd /home/u270359984/domains/brckoworldcup.com/public_html/proba-rezervacije && php cron.php all`
+- Pažnja: folder je unutar `public_html` glavnog sajta; objava glavnog sajta zip paketom ga može obrisati.

@@ -35,20 +35,41 @@ final class Config
     public static function all(): array { if (self::$cfg === null) self::load(); return self::$cfg; }
 }
 
+/**
+ * Pristup bazi. Produkcija: MySQL/MariaDB (InnoDB). Privremeno/probno: SQLite (jedna datoteka, bez servera baze).
+ * Za SQLite se MySQL-specifični dijelovi upita prevode u q(); upisi se serijalizuju sa BEGIN IMMEDIATE.
+ */
 final class Db
 {
     private static ?PDO $pdo = null;
     private static int $depth = 0;
+    private static string $driver = 'mysql';
 
     public static function connect(array $c): void
     {
-        self::$pdo = new PDO($c['dsn'], $c['user'], $c['pass'], [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false,
-        ]);
-        self::$pdo->exec("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
-        self::$pdo->exec("SET time_zone = '+00:00'");
+        $opts = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
+        self::$driver = str_starts_with($c['dsn'], 'sqlite:') ? 'sqlite' : 'mysql';
+        if (self::$driver === 'sqlite') {
+            $pdo = method_exists(PDO::class, 'connect') ? PDO::connect($c['dsn'], null, null, $opts) : new PDO($c['dsn'], null, null, $opts);
+            $pdo->setAttribute(PDO::ATTR_TIMEOUT, 10);
+            $pdo->exec('PRAGMA journal_mode = WAL');
+            $pdo->exec('PRAGMA foreign_keys = ON');
+            $pdo->exec('PRAGMA busy_timeout = 10000');
+            $fns = [
+                'CONCAT' => [fn(...$a) => implode('', array_map(fn($x) => (string) $x, $a)), -1],
+                'FIELD' => [function ($v, ...$list) { $i = array_search($v, $list, false); return $i === false ? 0 : $i + 1; }, -1],
+                'UTC_TIMESTAMP' => [fn() => gmdate('Y-m-d H:i:s'), 0],
+            ];
+            foreach ($fns as $name => [$fn, $n]) {
+                if (class_exists('Pdo\\Sqlite') && $pdo instanceof \Pdo\Sqlite) $pdo->createFunction($name, $fn, $n);
+                else $pdo->sqliteCreateFunction($name, $fn, $n);
+            }
+        } else {
+            $pdo = new PDO($c['dsn'], $c['user'], $c['pass'], $opts + [PDO::ATTR_EMULATE_PREPARES => false]);
+            $pdo->exec("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+            $pdo->exec("SET time_zone = '+00:00'");
+        }
+        self::$pdo = $pdo;
         self::$depth = 0;
     }
     public static function pdo(): PDO
@@ -56,10 +77,25 @@ final class Db
         if (self::$pdo === null) self::connect(Config::get('db'));
         return self::$pdo;
     }
+    public static function driver(): string { self::pdo(); return self::$driver; }
+    public static function isSqlite(): bool { return self::driver() === 'sqlite'; }
+
+    /** MySQL → SQLite prevod onoga što aplikacija koristi. */
+    private static function tr(string $sql): string
+    {
+        static $cache = [];
+        if (isset($cache[$sql])) return $cache[$sql];
+        $t = preg_replace('/\bINSERT IGNORE\b/i', 'INSERT OR IGNORE', $sql);
+        $t = preg_replace('/\s+FOR UPDATE\b/i', '', $t);
+        $t = preg_replace('/GROUP_CONCAT\(([^()]+?)\s+ORDER BY[^()]*\)/i', 'GROUP_CONCAT($1)', $t);
+        $t = preg_replace("/LIKE '((?:[^'\\\\]|\\\\.)*\\\\[_%](?:[^'\\\\]|\\\\.)*)'/", "LIKE '$1' ESCAPE '\\\\'", $t);
+        return $cache[$sql] = $t;
+    }
     public static function q(string $sql, array $p = []): PDOStatement
     {
+        if (self::isSqlite()) $sql = self::tr($sql);
         $st = self::pdo()->prepare($sql);
-        $st->execute(array_values($p) === $p ? $p : $p);
+        $st->execute($p);
         return $st;
     }
     public static function one(string $sql, array $p = []): ?array { $r = self::q($sql, $p)->fetch(); return $r === false ? null : $r; }
@@ -79,25 +115,46 @@ final class Db
         return self::q('UPDATE ' . $table . ' SET ' . implode(',', $parts) . ' WHERE ' . $where, array_merge(array_values($set), $p))->rowCount();
     }
     public static function inTx(): bool { return self::$depth > 0; }
+    public static function tableExists(string $t): bool
+    {
+        if (self::isSqlite()) return (bool) self::val("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [$t]);
+        return (bool) self::pdo()->query('SHOW TABLES LIKE ' . self::pdo()->quote($t))->fetch();
+    }
+    /** Folder s migracijama za aktivnu bazu. */
+    public static function migrationsDir(string $root): string { return $root . '/migrations' . (self::isSqlite() ? '/sqlite' : ''); }
 
-    /** Transakcija s ponovnim pokušajem kod deadlocka. Ugniježđeni pozivi rade u istoj transakciji. */
+    public static function isDuplicate(Throwable $e): bool
+    {
+        if (!$e instanceof PDOException) return false;
+        $code = (int) ($e->errorInfo[1] ?? 0);
+        return $code === 1062 || ($code === 19 && stripos($e->getMessage(), 'UNIQUE') !== false) || ($code === 19 && stripos($e->getMessage(), 'PRIMARY') !== false);
+    }
+    private static function isRetryable(Throwable $e): bool
+    {
+        if (!$e instanceof PDOException) return false;
+        $code = (string) ($e->errorInfo[1] ?? '');
+        return in_array($code, ['1213', '1205'], true) || (self::$driver === 'sqlite' && in_array($code, ['5', '6'], true));
+    }
+
+    /** Transakcija s ponovnim pokušajem kod deadlocka/zauzete baze. Ugniježđeni pozivi rade u istoj transakciji. */
     public static function tx(callable $fn): mixed
     {
         if (self::$depth > 0) return $fn();
+        $pdo = self::pdo();
         for ($attempt = 1; ; $attempt++) {
-            self::pdo()->beginTransaction();
+            if (self::$driver === 'sqlite') $pdo->exec('BEGIN IMMEDIATE'); else $pdo->beginTransaction();
             self::$depth = 1;
             try {
                 $r = $fn();
-                self::pdo()->commit();
+                if (self::$driver === 'sqlite') $pdo->exec('COMMIT'); else $pdo->commit();
                 self::$depth = 0;
                 return $r;
             } catch (Throwable $e) {
-                if (self::pdo()->inTransaction()) self::pdo()->rollBack();
+                if (self::$driver === 'sqlite') { try { $pdo->exec('ROLLBACK'); } catch (Throwable) {} }
+                elseif ($pdo->inTransaction()) $pdo->rollBack();
                 self::$depth = 0;
-                $deadlock = $e instanceof PDOException && in_array((string) ($e->errorInfo[1] ?? ''), ['1213', '1205'], true);
-                if ($deadlock && $attempt < 3) { usleep(50000 * $attempt); continue; }
-                if ($e instanceof PDOException && ($e->errorInfo[1] ?? 0) == 1062 && str_contains($e->getMessage(), 'lane_slots')) {
+                if (self::isRetryable($e) && $attempt < 3) { usleep(50000 * $attempt); continue; }
+                if (self::isDuplicate($e) && str_contains($e->getMessage(), 'lane_slots')) {
                     throw new AppError('Termin je upravo zauzet. Osvježite kalendar i izaberite drugi termin.', 409);
                 }
                 throw $e;
@@ -105,11 +162,11 @@ final class Db
         }
     }
 
-    /** Serijalizuje sve upise zauzetosti za jedan dan (zaštita od istovremenog duplog rezervisanja). */
+    /** Serijalizuje sve upise zauzetosti za jedan dan (zaštita od istovremenog duplog rezervisanja). SQLite: cijela baza je već zaključana (BEGIN IMMEDIATE). */
     public static function lockDay(string $day): void
     {
         self::q('INSERT IGNORE INTO day_locks (day) VALUES (?)', [$day]);
-        self::q('SELECT day FROM day_locks WHERE day = ? FOR UPDATE', [$day]);
+        if (!self::isSqlite()) self::q('SELECT day FROM day_locks WHERE day = ? FOR UPDATE', [$day]);
     }
 }
 
@@ -223,7 +280,7 @@ final class Phone
 final class Settings
 {
     public static function get(string $k, ?string $default = null): ?string { $v = Db::val('SELECT v FROM settings WHERE k = ?', [$k]); return $v === null ? $default : (string) $v; }
-    public static function set(string $k, string $v): void { Db::q('INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)', [$k, $v]); }
+    public static function set(string $k, string $v): void { Db::q('REPLACE INTO settings (k, v) VALUES (?, ?)', [$k, $v]); }
 }
 
 final class Audit

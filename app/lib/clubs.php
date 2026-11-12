@@ -247,7 +247,7 @@ final class Series
     public static function list(array $actor, ?string $status = null): array
     {
         Perms::require($actor, 'clubs.manage');
-        $rows = Db::all('SELECT s.*, c.name club_name, TRIM(CONCAT(u.first_name, " ", u.last_name)) requester FROM recurring_series s JOIN clubs c ON c.id = s.club_id LEFT JOIN users u ON u.id = s.requested_by' . ($status ? ' WHERE s.status = ?' : '') . ' ORDER BY FIELD(s.status, "pending", "approved", "ended", "rejected"), s.weekday, s.start_time', $status ? [$status] : []);
+        $rows = Db::all('SELECT s.*, c.name club_name, TRIM(CONCAT(u.first_name, \' \', u.last_name)) requester FROM recurring_series s JOIN clubs c ON c.id = s.club_id LEFT JOIN users u ON u.id = s.requested_by' . ($status ? ' WHERE s.status = ?' : '') . ' ORDER BY FIELD(s.status, \'pending\', \'approved\', \'ended\', \'rejected\'), s.weekday, s.start_time', $status ? [$status] : []);
         return $rows;
     }
 }

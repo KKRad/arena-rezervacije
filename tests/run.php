@@ -23,14 +23,14 @@ function reset_db(): void
     if (SQLITE_TEST) {
         foreach (['', '-wal', '-shm'] as $x) @unlink(SQLITE_FILE . $x);
         Db::connect(Config::get('db'));
-        Db::pdo()->exec(file_get_contents(__DIR__ . '/../migrations/sqlite/001_init.sql'));
+        foreach (glob(__DIR__ . '/../migrations/sqlite/*.sql') as $f) Db::pdo()->exec(file_get_contents($f));
         return;
     }
     $pdo = Db::pdo();
     $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
     foreach ($pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $t) $pdo->exec("DROP TABLE `$t`");
     $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
-    $pdo->exec(file_get_contents(__DIR__ . '/../migrations/001_init.sql'));
+    foreach (glob(__DIR__ . '/../migrations/*.sql') as $f) $pdo->exec(file_get_contents($f));
 }
 function mkuser(string $first, string $phone, string $role = 'guest', ?int $club = null): array
 {
@@ -444,8 +444,166 @@ test('Dnevni obračun i zabrana zaključivanja neriješenog dana', function () {
     $tot = DayClose::close($s, '2026-11-16');
     eq([$tot['lane'], $tot['shoes'], $tot['total']], [1500, 600, 2100], 'dnevni promet: kuglanje i patike odvojeno');
     eq($tot['club_value'][0]['value_cents'] ?? null, 1000, 'klupska vrijednost odvojeno od gotovine');
-    throws(fn() => book($g, '2026-11-16 22:00', 60, 1), 'zaključen dan');
     throws(fn() => DayClose::close($s, '2026-11-16'), 'dvostruko zaključenje', 'već');
+    // naplata poslije zaključenja ne mijenja zaključeni dan — ulazi u sljedeći otvoreni dan
+    eq(DayClose::paymentDay(), '2026-11-17', 'uplata poslije zaključenja ide u sljedeći dan');
+    as_($s); Coverage::activate((int) $g['id'], 'standard', null, $s);
+    eq((int) Db::val("SELECT COUNT(*) FROM payments WHERE business_day = '2026-11-16'"), 2, 'zaključeni dan ostaje nepromijenjen');
+    eq((int) Db::val("SELECT COUNT(*) FROM payments WHERE business_day = '2026-11-17' AND kind = 'monthly'"), 1, 'mjesečna plaćena poslije zaključenja → sljedeći dan');
+    eq(json_decode((string) Db::val("SELECT totals_json FROM day_closes WHERE day = '2026-11-16'"), true)['total'], 2100, 'snimak zaključenog dana nepromijenjen');
+});
+
+test('Zaključivanje dana: budući i tekući termini te klupski treninzi ne blokiraju', function () {
+    $s = mkuser('Sank', '060000000', 'staff');
+    $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");
+    $p = mkuser('Igrač', '064000001', 'guest', $rad);
+    $g = mkuser('Gost', '061000001');
+    $done = book($g, '2026-11-16 12:00', 60, [1]);
+    $future = book($g, '2026-11-16 21:00', 60, [2]);
+    $running = book($g, '2026-11-16 17:00', 120, [3]);
+    $training = book($p, '2026-11-16 17:00', 120, [4]);
+    Clock::set('2026-11-16 18:00:00');
+    as_($s);
+    eq(array_column(DayClose::blockers('2026-11-16'), 'reservation_id'), [$done['id']], 'blokira samo završeni neobrađeni termin');
+    eq(array_column(DayClose::openLater('2026-11-16'), 'reservation_id'), [$running['id'], $future['id']], 'tekući i budući termini prikazani informativno');
+    Reservations::settle($s, $done['id'], ['shoes_used' => false]);
+    $t = DayClose::close($s, '2026-11-16');
+    ok(isset($t['total']), 'dan zaključen uprkos budućem/tekućem terminu i treningu koji traje');
+    Clock::set('2026-11-16 22:05:00');
+    $rc = Reservations::settle($s, $future['id'], ['shoes_used' => false]);
+    eq((string) Db::val('SELECT business_day FROM payments WHERE id = ?', [$rc['payment_ids'][0]]), '2026-11-17', 'kasnija naplata ulazi u sljedeći dan');
+    $late = staffbook($s, ['start' => '2026-11-16 22:00', 'minutes' => 60, 'lanes' => [5], 'guest' => ['phone' => '065 444 555', 'first_name' => 'Kasni']]);
+    ok($late['id'] > 0, 'rezervacija na zaključeni dan moguća (dan zaključava samo novac)');
+    Reservations::autoProcessClub();
+    ok((bool) Db::val('SELECT processed_utc FROM reservations WHERE id = ?', [$training['id']]), 'završeni trening evidentiran klubu');
+});
+
+test('Istovremene rezervacije iste staze (više procesa u istom trenutku)', function () {
+    $users = [];
+    for ($i = 0; $i < 4; $i++) $users[] = mkuser('Paralelni' . $i, '06655500' . $i);
+    $okTotal = 0; $rounds = 5; $bad = [];
+    for ($round = 0; $round < $rounds; $round++) {
+        $start = '2027-03-0' . (1 + $round) . ' 18:00';
+        $goAt = microtime(true) + 1.2;
+        $procs = [];
+        foreach ($users as $u) {
+            $cmd = [PHP_BINARY, __DIR__ . '/worker-book.php', (string) $u['id'], $start, '3', (string) $goAt];
+            $procs[] = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), ['DB' => SQLITE_TEST ? 'sqlite' : 'mysql', 'ARENA_SQLITE' => SQLITE_FILE])) ?: null;
+            $GLOBALS['pp'][] = $pipes;
+        }
+        $outs = [];
+        foreach ($procs as $k => $pr) { $pipes = $GLOBALS['pp'][count($GLOBALS['pp']) - count($procs) + $k]; $outs[] = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]); proc_close($pr); }
+        $okN = count(array_filter($outs, fn($o) => $o === 'OK'));
+        $okTotal += $okN;
+        if ($okN !== 1) $bad[] = $start . ': ' . implode(' | ', $outs);
+        foreach ($outs as $o) if ($o !== 'OK' && !str_starts_with($o, 'ERR:')) $bad[] = $o;
+        eq((int) Db::val("SELECT COUNT(DISTINCT reservation_id) FROM lane_slots WHERE lane_id = 3 AND slot_start = ?", [$start . ':00']), 1, "runda $round: tačno jedna rezervacija drži stazu");
+    }
+    eq($okTotal, $rounds, '4 istovremena procesa × 5 rundi: uvijek uspije tačno jedan' . ($bad ? ' — ' . implode(' ;; ', $bad) : ''));
+    eq((int) Db::val("SELECT COUNT(*) FROM reservations WHERE start_at LIKE '2027-03-0%'"), $rounds, 'nema viška rezervacija u bazi');
+});
+
+test('Serija: zamjenska staza vidljiva u pregledu, detalj serije, preskočeni datumi', function () {
+    $o = mkuser('Vlasnik', '060000009', 'owner');
+    $g = mkuser('Gost', '061000001');
+    $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");
+    book($g, '2026-11-17 19:00', 60, [1]);        // željena staza 1 zauzeta → druga
+    book($g, '2026-11-24 19:00', 60, 6);          // sve zauzeto → konflikt
+    as_($o);
+    $s = Series::createByStaff($o, ['club_id' => $rad, 'weekday' => 2, 'start_time' => '19:00', 'minutes' => 60, 'lane_count' => 1, 'preferred_lanes' => [1]]);
+    $c = Series::check($o, (int) $s['id'])['conflicts'];
+    eq(array_column($c['reassigned'], 'date'), ['2026-11-17'], 'pregled prije odobrenja: datum sa zamjenskom stazom');
+    eq($c['reassigned'][0]['assigned'] ?? null, [2], 'zamjenska staza 2');
+    eq(array_column($c['dates'], 'date'), ['2026-11-24'], 'konflikt samo kad nijedna staza nije slobodna');
+    Series::approve($o, (int) $s['id'], ['2026-11-24']);
+    $d = Series::detail($o, (int) $s['id']);
+    $by = array_column($d['occurrences'], null, 'date');
+    eq([$by['2026-11-17']['lanes'], $by['2026-11-17']['changed']], [[2], true], 'detalj: promijenjena staza označena');
+    eq([$by['2026-12-01']['lanes'] ?? null, $by['2026-12-01']['changed'] ?? null], [[1], false], 'detalj: redovna pojava na željenoj stazi');
+    eq(array_column($d['exceptions'], 'date'), ['2026-11-24'], 'detalj: preskočeni datum s razlogom');
+    ok(!isset($by['2026-11-24']), 'preskočeni datum nema rezervaciju');
+    eq((int) Db::val("SELECT COUNT(*) FROM reservations WHERE user_id = ? AND status = 'active'", [$g['id']]), 2, 'postojeće rezervacije nisu prepisane');
+});
+
+test('Mjesečna: pregled prije potvrde i obavezna potvrda ranog produženja', function () {
+    $s = mkuser('Sank', '060000000', 'staff');
+    $m = mkuser('Mirko', '062000001');
+    as_($s);
+    $pre = Coverage::activationPreview((int) $m['id']);
+    eq([$pre['start'], $pre['last_day'], $pre['current'], $pre['amount_cents']], ['2026-11-16', '2026-12-15', null, 5000], 'pregled: novi period i iznos');
+    Coverage::activate((int) $m['id'], 'standard', null, $s);
+    Clock::set('2026-12-01 10:00:00');
+    $pre = Coverage::activationPreview((int) $m['id']);
+    eq([$pre['last_day'], $pre['current']['last_day'], $pre['current']['lost_days']], ['2026-12-31', '2026-12-15', 15], 'rano produženje: novi istek i broj izgubljenih dana');
+    $e = throws(fn() => Coverage::activate((int) $m['id'], 'standard', null, $s), 'rano produženje bez potvrde', 'NE prelazi');
+    ok(($e?->data['needs_confirm'] ?? false) === true, 'ekran dobija zahtjev za potvrdu');
+    eq((int) Db::val("SELECT COUNT(*) FROM payments WHERE kind = 'monthly'"), 1, 'bez potvrde nema uplate');
+    Coverage::activate((int) $m['id'], 'standard', null, $s, true);
+    eq((int) Db::val("SELECT COUNT(*) FROM payments WHERE kind = 'monthly'"), 2, 's potvrdom: nova uplata');
+    eq(Db::val('SELECT end_date FROM monthly_passes ORDER BY id LIMIT 1'), '2026-12-01', 'stari period zatvoren danom nove uplate');
+});
+
+test('Ostatak preko mjesečne: podesiv iznos (otvorena odluka)', function () {
+    $s = mkuser('Sank', '060000000', 'staff'); $o = mkuser('Vlasnik', '060000009', 'owner');
+    $m = mkuser('Mirko', '062000001');
+    as_($s); Coverage::activate((int) $m['id'], 'standard', null, $s);
+    $r1 = book($m, '2026-11-17 18:00', 90, 1);   // 90 iz mjesečne
+    $r2 = book($m, '2026-11-18 18:00', 90, 1);   // 30 iz mjesečne + 60 nepokriveno
+    eq(Reservations::quoteSettle($r2['id'])['cash_total'], 1500, 'primjer: 60 nepokrivenih min = 2 × 7,50 = 15,00 KM');
+    $r3 = book($m, '2026-11-19 18:00', 60, 1);   // 0 iz mjesečne → puna rekreacija
+    eq(Reservations::quoteSettle($r3['id'])['cash_total'], 1500, 'bez pokrića: obična rekreacija 15 KM');
+    $api = new Api(Auth::createSession((int) $o['id']));
+    eq($api->handle('POST', 'prices', [], ['recreation_30' => '7,50', 'recreation_min' => '15', 'shoes' => '3', 'training_lane_hour' => '10', 'monthly' => '50', 'monthly_remainder_30' => '7,50', 'monthly_remainder_min' => '15'])[0], 200, 'vlasnik mijenja pravilo ostatka');
+    $r4 = staffbook($s, ['start' => '2026-11-24 18:00', 'minutes' => 150, 'lanes' => [1], 'category' => 'recreation', 'user_id' => $m['id']]);   // nova sedmica: 120 iz mjesečne + 30 nepokriveno
+    eq(Reservations::quoteSettle($r4['id'])['cash_total'], 1500, 'nova verzija: ostatak 30 min s minimumom 15 KM');
+    eq(Reservations::quoteSettle($r2['id'])['cash_total'], 1500, 'stara rezervacija zadržava staru verziju cijene');
+});
+
+test('Pristup bez ovlaštenja (server odbija, ne samo skrivena dugmad)', function () {
+    $g = mkuser('Gost', '061000001'); $s = mkuser('Sank', '060000000', 'staff'); $m = mkuser('Menadzer', '060000001', 'manager');
+    $other = mkuser('Drugi', '061000002');
+    $r = book($other, '2026-11-17 18:00', 60, 1);
+    $staffOnly = [['GET', 'dashboard'], ['GET', 'users', ['q' => '061']], ['GET', 'users/' . $other['id']], ['GET', 'day'], ['POST', 'day/close'], ['GET', 'requests'], ['GET', 'clubs'],
+        ['GET', 'statements'], ['POST', 'statements'], ['GET', 'series'], ['POST', 'events'], ['POST', 'reservations/' . $r['id'] . '/arrived'], ['POST', 'reservations/' . $r['id'] . '/settle'],
+        ['GET', 'reservations/' . $r['id']], ['POST', 'reservations/' . $r['id'] . '/cancel'], ['POST', 'users/' . $other['id'] . '/monthly'], ['GET', 'stats'], ['GET', 'audit'], ['GET', 'outbox'],
+        ['POST', 'prices'], ['GET', 'staff-accounts'], ['POST', 'perms/' . $s['id']], ['GET', 'backup/list'], ['POST', 'backup/run']];
+    $gapi = new Api(Auth::createSession((int) $g['id']));
+    $leaks = [];
+    foreach ($staffOnly as $c) { $st = $gapi->handle($c[0], $c[1], $c[2] ?? [], [])[0]; if (!in_array($st, [401, 403], true)) $leaks[] = "$c[0] $c[1] → $st"; }
+    eq($leaks, [], 'gost: svi interni pozivi odbijeni (401/403)');
+    $anon = new Api(null); $leaks = [];
+    foreach ($staffOnly as $c) { $st = $anon->handle($c[0], $c[1], $c[2] ?? [], [])[0]; if (!in_array($st, [401, 403], true)) $leaks[] = "$c[0] $c[1] → $st"; }
+    eq($leaks, [], 'bez prijave: svi interni pozivi odbijeni');
+    $sapi = new Api(Auth::createSession((int) $s['id']));
+    $ownerOnly = [['GET', 'stats'], ['POST', 'prices'], ['GET', 'staff-accounts'], ['POST', 'perms/' . $s['id']], ['GET', 'recipients'], ['GET', 'outbox'], ['GET', 'audit'], ['POST', 'debts/1/forgive'], ['POST', 'payments/1/correct'], ['GET', 'statements'], ['GET', 'backup/list']];
+    $leaks = [];
+    foreach ($ownerOnly as $c) { $st = $sapi->handle($c[0], $c[1], [], ['reason' => 'x'])[0]; if ($st !== 403) $leaks[] = "$c[0] $c[1] → $st"; }
+    eq($leaks, [], 'Šank Arena: vlasnička/menadžerska prava odbijena');
+    $mapi = new Api(Auth::createSession((int) $m['id']));
+    eq([$mapi->handle('GET', 'stats', [], [])[0], $mapi->handle('GET', 'staff-accounts', [], [])[0], $mapi->handle('GET', 'backup/list', [], [])[0]], [403, 403, 403], 'menadžer: statistika, ovlaštenja i backup samo za vlasnika');
+    // vlasnik dodijeli Šanku pravo → server ga poštuje
+    $o = mkuser('Vlasnik', '060000009', 'owner');
+    (new Api(Auth::createSession((int) $o['id'])))->handle('POST', 'perms/' . $s['id'], [], ['perms' => array_merge(Perms::DEFAULTS['staff'], ['stats.view'])]);
+    eq($sapi->handle('GET', 'stats', [], [])[0], 200, 'dodijeljeno pravo radi na serveru');
+    $gdet = $gapi->handle('GET', 'reservations/' . $r['id'], [], []);
+    eq($gdet[0], 403, 'gost ne vidi tuđu rezervaciju');
+});
+
+test('Produkcija: bez koda na ekranu i bez javne registracije dok SMS nije povezan', function () {
+    $base = Config::all();
+    Config::load(array_merge($base, ['env' => 'prod', 'channels' => []]));
+    $api = new Api(null, '9.9.9.9');
+    [$st, $res] = $api->handle('POST', 'auth/register', [], ['first_name' => 'A', 'last_name' => 'B', 'phone' => '062 111 222', 'email' => 'a@example.test', 'password' => 'lozinka12345']);
+    eq($st, 503, 'produkcija bez SMS-a: registracija isključena');
+    eq($api->handle('POST', 'auth/reset', [], ['phone' => '062 111 222'])[0], 503, 'produkcija bez SMS-a: oporavak isključen');
+    eq($api->handle('GET', 'me', [], [])[1]['data']['registration'], false, 'ekran zna da registracija nije dostupna');
+    Config::load(array_merge($base, ['env' => 'prod', 'registration_enabled' => true, 'channels' => []]));
+    eq((new Api(null))->handle('POST', 'auth/reset', [], ['phone' => '062 111 222'])[0], 503, 'uključeno, ali kanal nije povezan: i dalje isključeno');
+    Config::load(array_merge($base, ['env' => 'prod', 'registration_enabled' => true, 'channels' => ['sms' => ['adapter' => 'http', 'url' => 'http://127.0.0.1:9/x']]]));
+    [$st, $res] = (new Api(null))->handle('POST', 'auth/register', [], ['first_name' => 'A', 'last_name' => 'B', 'phone' => '062 111 223', 'email' => 'a@example.test', 'password' => 'lozinka12345']);
+    eq([$st, array_key_exists('dev_code', $res['data']) ? $res['data']['dev_code'] : 'nema', $res['data']['sms']], [200, null, 'pending'], 'produkcija: kod se NE vraća na ekran; neuspjelo slanje nije „poslano“');
+    eq((new Api(null))->handle('GET', 'dev/codes', [], [])[0], 404, 'produkcija: razvojni pregled kodova ne postoji');
+    Config::load($base);
 });
 
 test('Nalozi: registracija, povezivanje profila, prijava, oporavak, ograničenja', function () {

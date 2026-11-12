@@ -22,7 +22,8 @@ final class Pricing
     public static function remainderCash(int $minutes, array $pv): int
     {
         if ($minutes <= 0) return 0;
-        return intdiv($minutes + 29, 30) * (int) $pv['recreation_30_cents'];
+        $per30 = (int) ($pv['monthly_remainder_30_cents'] ?? $pv['recreation_30_cents']);
+        return max(intdiv($minutes + 29, 30) * $per30, (int) ($pv['monthly_remainder_min_cents'] ?? 0));
     }
     public static function training(int $lanes, int $minutes, array $pv): int
     {
@@ -163,13 +164,28 @@ final class Coverage
     }
 
     /** Aktivacija/produženje nakon primljene gotovine. Period počinje danas (bez retroaktivnog početka). */
-    public static function activate(int $userId, string $kind, ?int $weeklyMinutes, array $by): array
+    /** Šta će se desiti pri aktivaciji danas (prikazuje se prije potvrde). */
+    public static function activationPreview(int $userId): array
     {
+        $today = Clock::today();
+        $cur = self::passOn($userId, $today);
+        $end = T::addMonth($today);
+        return ['start' => $today, 'last_day' => T::addDays($end, -1), 'amount_cents' => (int) Pricing::current()['monthly_cents'],
+            'current' => $cur ? ['kind' => $cur['kind'], 'last_day' => T::addDays($cur['end_date'], -1), 'lost_days' => (int) (T::minutes($today . ' 12:00:00', $cur['end_date'] . ' 12:00:00') / 1440)] : null];
+    }
+
+    public static function activate(int $userId, string $kind, ?int $weeklyMinutes, array $by, bool $confirmEarly = false): array
+    {
+        $pre = self::activationPreview($userId);
+        if ($pre['current'] && !$confirmEarly) {
+            throw new AppError('Korisnik ima aktivnu mjesečnu do ' . T::humanDate($pre['current']['last_day']) . '. Novi period bi trajao od ' . T::humanDate($pre['start']) . ' do ' . T::humanDate($pre['last_day'])
+                . '; preostalih ' . $pre['current']['lost_days'] . ' dana prethodnog perioda NE prelazi u novi. Potvrdite produženje.', 409, ['preview' => $pre, 'needs_confirm' => true]);
+        }
         return Db::tx(function () use ($userId, $kind, $weeklyMinutes, $by) {
             $u = Db::one('SELECT * FROM users WHERE id = ? FOR UPDATE', [$userId]);
             if (!$u) throw new AppError('Korisnik ne postoji.', 404);
-            DayClose::assertOpen(Clock::today());
-            $today = Clock::today();
+            $today = Clock::today();            // početak perioda = stvarni dan uplate
+            $payDay = DayClose::paymentDay();   // dan dnevnog obračuna (sljedeći ako je današnji zaključen)
             $pv = Pricing::current();
             if ($kind === 'vip') {
                 if (!Perms::has($by, 'monthly.vip')) throw new AppError('VIP mjesečnu može odobriti samo vlasnik ili ovlašteni menadžer.', 403);
@@ -177,7 +193,7 @@ final class Coverage
             } else { $kind = 'standard'; $weeklyMinutes = (int) Settings::get('standard_weekly_minutes', '120'); }
             $cur = self::passOn($userId, $today);
             if ($cur) Db::update('monthly_passes', ['end_date' => $today, 'status' => 'ended', 'ended_reason' => 'Novi period od ' . T::humanDate($today)], 'id = ?', [$cur['id']]);
-            $payId = Db::insert('payments', ['business_day' => $today, 'user_id' => $userId, 'kind' => 'monthly', 'category' => 'monthly', 'amount_cents' => (int) $pv['monthly_cents'], 'created_by' => $by['id'], 'created_utc' => Clock::nowUtc()]);
+            $payId = Db::insert('payments', ['business_day' => $payDay, 'user_id' => $userId, 'kind' => 'monthly', 'category' => 'monthly', 'amount_cents' => (int) $pv['monthly_cents'], 'created_by' => $by['id'], 'created_utc' => Clock::nowUtc()]);
             $passId = Db::insert('monthly_passes', ['user_id' => $userId, 'kind' => $kind, 'weekly_minutes' => $weeklyMinutes, 'start_date' => $today, 'end_date' => T::addMonth($today), 'payment_id' => $payId, 'created_by' => $by['id'], 'created_utc' => Clock::nowUtc()]);
             Db::update('payments', ['pass_id' => $passId], 'id = ?', [$payId]);
             Db::q("UPDATE monthly_requests SET status = 'done', handled_by = ?, handled_utc = ? WHERE user_id = ? AND status = 'pending'", [$by['id'], Clock::nowUtc(), $userId]);

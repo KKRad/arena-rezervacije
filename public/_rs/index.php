@@ -38,8 +38,8 @@ if (preg_match('#^/rezervacije/api/(.*)$#', $path, $m)) {
     if ($status === 200 && is_array($body['data'] ?? null) && isset($body['data']['__file'])) {
         $f = $body['data']['__file'];
         if (!is_file($f)) { http_response_code(404); echo json_encode(['ok' => false, 'error' => 'Datoteka ne postoji.']); exit; }
-        header('Content-Type: application/pdf');
-        header('Content-Disposition: inline; filename="' . preg_replace('/[^A-Za-z0-9._-]/', '', $body['data']['name']) . '"');
+        header('Content-Type: ' . (str_ends_with($f, '.pdf') ? 'application/pdf' : 'application/gzip'));
+        header('Content-Disposition: ' . (str_ends_with($f, '.pdf') ? 'inline' : 'attachment') . '; filename="' . preg_replace('/[^A-Za-z0-9._-]/', '', $body['data']['name']) . '"');
         readfile($f); exit;
     }
     http_response_code($status);

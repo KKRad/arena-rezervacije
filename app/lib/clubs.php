@@ -102,7 +102,8 @@ final class Series
      */
     public static function conflicts(array $s): array
     {
-        $out = ['dates' => [], 'rule' => []];
+        $out = ['dates' => [], 'rule' => [], 'reassigned' => []];
+        $pref = !empty($s['preferred_lanes']) ? array_map('intval', explode(',', $s['preferred_lanes'])) : [];
         foreach (Db::all("SELECT o.*, c.name club FROM recurring_series o JOIN clubs c ON c.id = o.club_id WHERE o.status = 'approved' AND o.weekday = ? AND o.id <> ?", [$s['weekday'], $s['id'] ?? 0]) as $o) {
             $overlapTime = $o['start_time'] < T::hm(T::addMin('2000-01-03 ' . $s['start_time'] . ':00', (int) $s['minutes'])) && $s['start_time'] < T::hm(T::addMin('2000-01-03 ' . $o['start_time'] . ':00', (int) $o['minutes']));
             $overlapDates = ($o['valid_to'] === null || $o['valid_to'] >= $s['valid_from']) && ($s['valid_to'] === null || $s['valid_to'] >= $o['valid_from']);
@@ -117,6 +118,11 @@ final class Series
             if (!empty($s['id']) && Db::val('SELECT id FROM reservations WHERE series_id = ? AND occurrence_date = ?', [$s['id'], $d])) continue;
             $ss = $d . ' ' . $s['start_time'] . ':00'; $se = T::addMin($ss, (int) $s['minutes']);
             $free = Availability::freeLanes($ss, $se);
+            if (count($free) >= (int) $s['lane_count'] && $pref && array_diff(array_slice($pref, 0, (int) $s['lane_count']), $free)) {
+                $order = array_values(array_unique(array_merge(array_intersect($pref, $free), $free)));
+                $as = array_slice($order, 0, (int) $s['lane_count']); sort($as);
+                $out['reassigned'][] = ['date' => $d, 'preferred' => array_slice($pref, 0, (int) $s['lane_count']), 'assigned' => $as];
+            }
             if (count($free) < (int) $s['lane_count']) {
                 $what = array_map(fn($c) => $c['label'] . ' ' . T::hm($c['start_at']) . '–' . T::hm($c['end_at']), array_filter(Availability::conflicts($ss, $se, Availability::LANES, null, (int) ($s['id'] ?? 0)), fn($c) => $c['type'] !== 'series'));
                 $out['dates'][] = ['date' => $d, 'free_lanes' => $free, 'conflicts' => array_values(array_unique($what))];
@@ -215,7 +221,6 @@ final class Series
             $shift = ((int) $s['weekday'] - T::weekday($d) + 7) % 7;
             $d = T::addDays($d, $shift);
             for (; $d <= $to; $d = T::addDays($d, 7)) {
-                if (DayClose::isClosed($d)) continue;
                 $n += Db::tx(function () use ($s, $d) {
                     Db::lockDay($d);
                     if (Db::val('SELECT 1 FROM series_exceptions WHERE series_id = ? AND date = ?', [$s['id'], $d])) return 0;
@@ -242,6 +247,23 @@ final class Series
             Db::update('recurring_series', ['materialized_to' => $to], 'id = ?', [$s['id']]);
         }
         return $n;
+    }
+
+    /** Pregled serije: upisane pojave sa stazama (oznaka kad nije željena staza) i preskočeni datumi s razlogom. */
+    public static function detail(array $actor, int $id): array
+    {
+        Perms::require($actor, 'clubs.manage');
+        $s = self::get($id);
+        $pref = $s['preferred_lanes'] ? array_map('intval', explode(',', $s['preferred_lanes'])) : [];
+        $want = array_slice($pref, 0, (int) $s['lane_count']); sort($want);
+        $occ = [];
+        foreach (Db::all('SELECT r.id, r.occurrence_date, r.status, r.cancel_kind, r.start_at, r.end_at FROM reservations r WHERE r.series_id = ? ORDER BY r.occurrence_date', [$id]) as $r) {
+            $lanes = array_map('intval', array_column(Db::all('SELECT lane_id FROM reservation_lanes WHERE reservation_id = ? ORDER BY lane_id', [$r['id']]), 'lane_id'));
+            $occ[] = ['reservation_id' => (int) $r['id'], 'date' => $r['occurrence_date'], 'lanes' => $lanes, 'status' => $r['status'], 'cancel_kind' => $r['cancel_kind'],
+                'changed' => $want && $lanes !== $want];
+        }
+        return ['series' => $s, 'preferred' => $want, 'occurrences' => $occ, 'exceptions' => $s['exceptions'], 'materialized_to' => $s['materialized_to'],
+            'note' => 'Pojave se upisuju unaprijed za ' . (int) Settings::get('series_window_days', '56') . ' dana; dalji datumi se upisuju automatski (pravilo traje dok se ne ukine).'];
     }
 
     public static function list(array $actor, ?string $status = null): array

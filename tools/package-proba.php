@@ -24,7 +24,7 @@ copy("$root/cron.php", "$out/cron.php");
 foreach (['logo-light.webp', 'favicon.png'] as $f) copy("$root/../arena-bakarni-site/assets/img/$f", "$out/assets/img/$f");
 $dbExport = $sqlite ? "['dsn' => 'sqlite:' . dirname(__DIR__, 2) . '/proba-data/arena-rs.sqlite', 'user' => null, 'pass' => null]"
     : var_export(['dsn' => "mysql:host=127.0.0.1;port=3306;dbname=$dbName;charset=utf8mb4", 'user' => $dbUser, 'pass' => $pass], true);
-file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'data_dir' => dirname(__DIR__, 2) . '/proba-data',\n  'base_url' => 'https://proba.brckoworldcup.com', 'cookie_secure' => true, 'channels' => []];\n");
+file_put_contents("$out/config.php", "<?php\n// PROBNO okruženje (ne produkcija).\n// Ako postoji ../../proba-data/config.php (izvan foldera sajta, npr. s lozinkom MySQL baze), koristi se ta datoteka.\nif (is_file(\$ext = dirname(__DIR__, 2) . '/proba-data/config.php')) return require \$ext;\nreturn ['env' => 'dev', 'auto_setup' => true, 'show_dev_codes' => true,\n  'db' => $dbExport,\n  'data_dir' => dirname(__DIR__, 2) . '/proba-data',\n  'base_url' => 'https://proba.brckoworldcup.com', 'cookie_secure' => true, 'channels' => []];\n");
 $htDeny = "Require all denied\n";
 foreach (['app', 'migrations', 'tools', 'storage'] as $d) file_put_contents("$out/$d/.htaccess", $htDeny);
 file_put_contents("$out/.htaccess", <<<HT
@@ -54,10 +54,24 @@ $accounts = [
     ['first_name' => 'Član', 'last_name' => 'Rada', 'phone' => '+38761200200', 'email' => 'clan@example.test', 'role' => 'guest', 'club' => 'Rad'],
 ];
 // Lozinke se prave samo jednom i čuvaju lokalno (storage/proba-seed.json + PROBA-NALOZI.txt), da nova objava ne promijeni prijave.
+
+// Arhiva ove verzije za vraćanje (rollback): build/archive/proba-<datum>-<git>.zip
+function proba_archive(string $root, string $out): void {
+    $hash = trim((string) shell_exec('git -C ' . escapeshellarg($root) . ' rev-parse --short HEAD 2>/dev/null')) ?: 'nogit';
+    $dirty = trim((string) shell_exec('git -C ' . escapeshellarg($root) . ' status --porcelain 2>/dev/null')) !== '' ? '-izmjene' : '';
+    @mkdir("$root/build/archive", 0775, true);
+    $zipPath = "$root/build/archive/proba-" . date('Ymd-His') . "-$hash$dirty.zip";
+    $z = new ZipArchive(); $z->open($zipPath, ZipArchive::CREATE);
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($out, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) $z->addFile($f->getPathname(), substr($f->getPathname(), strlen($out) + 1));
+    $z->close();
+    echo "arhiva za vraćanje: build/archive/" . basename($zipPath) . "\n";
+}
 $keep = "$root/storage/proba-seed.json";
 if (is_file($keep) && is_file("$root/PROBA-NALOZI.txt")) {
     copy($keep, "$out/storage/proba-seed.json");
     echo "build/proba spreman (postojeće probne lozinke iz PROBA-NALOZI.txt)\n";
+    proba_archive($root, $out);
     exit;
 }
 $lines = ["PROBNI NALOZI — https://proba.brckoworldcup.com/nalog/  (samo probno okruženje; ne koristiti ove lozinke nigdje drugdje)", ''];
@@ -70,3 +84,4 @@ file_put_contents("$out/storage/proba-seed.json", json_encode(['users' => $accou
 copy("$out/storage/proba-seed.json", $keep);
 file_put_contents("$root/PROBA-NALOZI.txt", implode("\n", $lines) . "\n");
 echo "build/proba spreman; nalozi u PROBA-NALOZI.txt\n";
+proba_archive($root, $out);

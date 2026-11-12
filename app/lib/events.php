@@ -37,7 +37,6 @@ final class Events
         Perms::require($actor, 'events.manage');
         $e = self::parse($in);
         $id = Db::tx(function () use ($actor, $e) {
-            DayClose::assertOpen(T::day($e['start_at']));
             Db::lockDay(T::day($e['start_at']));
             $c = Availability::conflicts($e['start_at'], $e['end_at'], $e['lanes']);
             if ($c) throw new AppError('Prije potvrde riješite postojeće konflikte (premjestite ili otkažite termine, ili preskočite stalne termine).', 409, ['conflicts' => $c]);

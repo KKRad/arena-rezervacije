@@ -135,8 +135,20 @@ final class Auth
         return $row;
     }
 
+    /** Registracija/oporavak putem telefona: u produkciji tek kad je SMS kanal povezan I izričito uključeno ('registration_enabled' => true). */
+    public static function registrationOpen(): bool
+    {
+        if (Config::get('env') !== 'prod') return true;
+        return Config::get('registration_enabled') === true && Notify::channel('sms') !== null;
+    }
+    private static function requireRegistration(): void
+    {
+        if (!self::registrationOpen()) throw new AppError('Registracija i oporavak lozinke putem telefona još nisu uključeni. Za rezervaciju se obratite Areni.', 503);
+    }
+
     public static function registerStart(array $in): array
     {
+        self::requireRegistration();
         $first = str_req($in, 'first_name', 80); $last = str_req($in, 'last_name', 80);
         $phone = Phone::require($in['phone'] ?? null);
         $email = str_req($in, 'email', 190);
@@ -197,6 +209,7 @@ final class Auth
 
     public static function resetStart(array $in): array
     {
+        self::requireRegistration();
         $phone = Phone::require($in['phone'] ?? null);
         $u = self::userByPhone($phone);
         // Isti odgovor bez obzira postoji li nalog (ne otkrivamo registrovane brojeve).

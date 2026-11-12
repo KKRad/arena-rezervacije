@@ -10,8 +10,7 @@ final class Cash
         Perms::require($actor, 'cash.correct');
         if (trim($reason) === '') throw new AppError('Unesite razlog ispravke.');
         $out = Db::tx(function () use ($actor, $paymentId, $newAmount, $reason) {
-            $today = Clock::today();
-            DayClose::assertOpen($today);
+            $today = DayClose::paymentDay();
             $p = Db::one('SELECT * FROM payments WHERE id = ? FOR UPDATE', [$paymentId]);
             if (!$p) throw new AppError('Uplata ne postoji.', 404);
             if ($p['reverses_payment_id']) throw new AppError('Storno stavka se ne može ponovo stornirati.');
@@ -49,10 +48,10 @@ final class Cash
     {
         Perms::require($actor, 'cash.collect');
         return Db::tx(function () use ($actor, $debtId) {
-            DayClose::assertOpen(Clock::today());
+            $payDay = DayClose::paymentDay();
             $d = Db::one("SELECT * FROM debts WHERE id = ? AND status = 'open' FOR UPDATE", [$debtId]);
             if (!$d) throw new AppError('Dug nije otvoren.');
-            $pid = Db::insert('payments', ['business_day' => Clock::today(), 'user_id' => $d['user_id'], 'debt_id' => $debtId, 'kind' => 'debt', 'category' => 'recreation', 'amount_cents' => $d['amount_cents'], 'created_by' => $actor['id'], 'created_utc' => Clock::nowUtc()]);
+            $pid = Db::insert('payments', ['business_day' => $payDay, 'user_id' => $d['user_id'], 'debt_id' => $debtId, 'kind' => 'debt', 'category' => 'recreation', 'amount_cents' => $d['amount_cents'], 'created_by' => $actor['id'], 'created_utc' => Clock::nowUtc()]);
             Db::update('debts', ['status' => 'paid', 'closed_by' => $actor['id'], 'closed_utc' => Clock::nowUtc()], 'id = ?', [$debtId]);
             Audit::log('debt.paid', 'debt', $debtId, ['payment_id' => $pid]);
             return $pid;
@@ -63,6 +62,26 @@ final class Cash
 final class DayClose
 {
     public static function isClosed(string $day): bool { return (bool) Db::val('SELECT day FROM day_closes WHERE day = ?', [$day]); }
+    /**
+     * Dan u koji se upisuje nova uplata: danas, a ako je današnji dan već zaključen — prvi sljedeći nezaključeni dan
+     * (zaključeni dnevni obračun se nikad ne mijenja).
+     */
+    public static function paymentDay(): string
+    {
+        $d = Clock::today();
+        while (self::isClosed($d)) $d = T::addDays($d, 1);
+        return $d;
+    }
+
+    /** Lični termini tog dana koji još nisu završeni — ne blokiraju zaključenje (informativno). */
+    public static function openLater(string $day): array
+    {
+        $rows = Db::all("SELECT r.id, r.start_at, r.end_at, r.category, TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))) who FROM reservations r LEFT JOIN users u ON u.id = r.user_id
+            WHERE r.status = 'active' AND r.processed_utc IS NULL AND r.category IN ('recreation','monthly','birthday') AND r.start_at >= ? AND r.start_at < ? AND r.end_at > ? ORDER BY r.start_at",
+            [$day . ' 00:00:00', T::addDays($day, 1) . ' 00:00:00', Clock::nowLocal()]);
+        return array_map(fn($r) => ['reservation_id' => (int) $r['id'], 'time' => T::hm($r['start_at']) . '–' . T::hm($r['end_at']), 'who' => $r['who'], 'category' => Cat::label($r['category'])], $rows);
+    }
+
     public static function assertOpen(string $day): void
     {
         if (self::isClosed($day)) throw new AppError('Dan ' . T::humanDate($day) . ' je zaključen — izmjene nisu moguće.', 409);
@@ -74,12 +93,12 @@ final class DayClose
         Reservations::autoProcessClub();
         $now = Clock::nowLocal();
         $out = [];
-        $rows = Db::all("SELECT r.*, u.first_name, u.last_name FROM reservations r LEFT JOIN users u ON u.id = r.user_id WHERE r.status = 'active' AND r.processed_utc IS NULL AND r.start_at >= ? AND r.start_at < ? ORDER BY r.start_at", [$day . ' 00:00:00', T::addDays($day, 1) . ' 00:00:00']);
+        // Blokiraju samo ZAVRŠENI lični termini bez ishoda/pokrića. Budući i tekući termini ne blokiraju;
+        // klupski termini se po završetku sami evidentiraju klubu i nikad ne blokiraju.
+        $rows = Db::all("SELECT r.*, u.first_name, u.last_name FROM reservations r LEFT JOIN users u ON u.id = r.user_id WHERE r.status = 'active' AND r.processed_utc IS NULL AND r.category IN ('recreation','monthly','birthday') AND r.start_at >= ? AND r.start_at < ? AND r.end_at <= ? ORDER BY r.start_at", [$day . ' 00:00:00', T::addDays($day, 1) . ' 00:00:00', $now]);
         foreach ($rows as $r) {
             $who = trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')) ?: Cat::label($r['category']);
-            if (Cat::isClub($r['category'])) { $why = 'Klupski termin još traje (' . T::hm($r['end_at']) . ')'; }
-            elseif ($r['attendance'] === 'pending') $why = $r['end_at'] <= $now ? 'Nije evidentiran dolazak ni naplata' : ($r['start_at'] <= $now ? 'Termin u toku — nije evidentiran' : 'Termin još nije počeo');
-            else $why = 'Došao — nije naplaćeno / nema pokrića';
+            $why = $r['attendance'] === 'pending' ? 'Nije evidentiran dolazak ni naplata' : 'Došao — nije naplaćeno / nema pokrića';
             $out[] = ['reservation_id' => (int) $r['id'], 'time' => T::hm($r['start_at']) . '–' . T::hm($r['end_at']), 'who' => $who, 'category' => Cat::label($r['category']), 'reason' => $why];
         }
         return $out;

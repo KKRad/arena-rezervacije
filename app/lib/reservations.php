@@ -101,7 +101,6 @@ final class Reservations
         $pv = Pricing::current();
 
         $id = Db::tx(function () use ($actor, $user, $category, $clubId, $start, $end, $minutes, $want, $match, $in, $pv, $staffMode) {
-            DayClose::assertOpen(T::day($start));
             Db::lockDay(T::day($start));
             $lanes = Availability::pick($start, $end, $want);
             $clubAmount = null;
@@ -157,7 +156,7 @@ final class Reservations
 
         Db::tx(function () use ($actor, $id, $start, $end, $want, $minutes, $staff) {
             $days = array_unique([T::day($start), T::day(self::get($id)['start_at'])]); sort($days);
-            foreach ($days as $d) { DayClose::assertOpen($d); Db::lockDay($d); }
+            foreach ($days as $d) Db::lockDay($d);
             $r = self::lockRow($id);
             $lanes = Availability::pick($start, $end, $want, $id, true, $r['series_id'] ? (int) $r['series_id'] : null);
             Availability::freeReservation($id);
@@ -297,8 +296,7 @@ final class Reservations
         $debtIds = array_map('intval', (array) ($in['debt_ids'] ?? []));
 
         return Db::tx(function () use ($actor, $id, $pairs, $used, $debtIds) {
-            $today = Clock::today();
-            DayClose::assertOpen($today);
+            $today = DayClose::paymentDay();
             $r = self::lockRow($id);
             if ($r['status'] !== 'active') throw new AppError('Rezervacija je otkazana.');
             if ($r['processed_utc']) throw new AppError('Termin je već zaključen.');

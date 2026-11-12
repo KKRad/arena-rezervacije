@@ -52,7 +52,7 @@ final class Api
             case 'POST auth/logout': Auth::logout($this->token); $this->clearToken = true; return null;
             case 'POST auth/reset': return Auth::resetStart($in) + ['dev_code' => $this->devCode(), 'sms' => Auth::$lastSmsStatus === 'failed' ? 'failed' : null];
             case 'POST auth/reset-confirm': $r = Auth::resetConfirm($in); $this->setToken = $r['token']; return ['user' => Auth::publicUser(Auth::userById($r['user_id']))];
-            case 'GET me': return $this->u ? ['user' => Auth::publicUser($this->u), 'perms' => Perms::forUser($this->u), 'staff' => Perms::isStaff($this->u), 'club' => $this->u['club_id'] ? Db::one('SELECT id, name FROM clubs WHERE id = ?', [$this->u['club_id']]) : null] : ['user' => null];
+            case 'GET me': return ['registration' => Auth::registrationOpen(), 'env' => Config::get('env') === 'prod' ? 'prod' : 'proba'] + ($this->u ? ['user' => Auth::publicUser($this->u), 'perms' => Perms::forUser($this->u), 'staff' => Perms::isStaff($this->u), 'club' => $this->u['club_id'] ? Db::one('SELECT id, name FROM clubs WHERE id = ?', [$this->u['club_id']]) : null] : ['user' => null]);
             case 'GET me/overview': return $this->overview((int) $this->me()['id'], false);
             case 'POST me/monthly-request': Coverage::request((int) $this->me()['id'], (string) ($in['kind'] ?? 'new')); return null;
             case 'POST me/series-request': return Series::request($this->me(), $in);
@@ -92,7 +92,8 @@ final class Api
                 Audit::log('user.unblocked', 'user', $id); return $this->userCard($id);
             case 'POST users/:id/club': Clubs::setMember($this->me(), $id, !empty($in['club_id']) ? (int) $in['club_id'] : null); return $this->userCard($id);
             case 'POST users/:id/bonus': $this->staff('bonus.manage'); Coverage::manualBonus($id, int_req($in, 'minutes'), str_req($in, 'reason', 255)); return $this->userCard($id);
-            case 'POST users/:id/monthly': $a = $this->staff('monthly.manage'); Coverage::activate($id, (string) ($in['kind'] ?? 'standard'), isset($in['weekly_minutes']) ? (int) $in['weekly_minutes'] : null, $a); return $this->userCard($id);
+            case 'GET users/:id/monthly-preview': $this->staff('monthly.manage'); return Coverage::activationPreview($id);
+            case 'POST users/:id/monthly': $a = $this->staff('monthly.manage'); Coverage::activate($id, (string) ($in['kind'] ?? 'standard'), isset($in['weekly_minutes']) ? (int) $in['weekly_minutes'] : null, $a, !empty($in['confirm_early'])); return $this->userCard($id);
 
             // ---------- mjesečne, zahtjevi ----------
             case 'GET requests': $this->staff('res.read'); return $this->requests();
@@ -106,6 +107,7 @@ final class Api
             case 'GET series': return Series::list($this->me(), $q['status'] ?? null);
             case 'POST series': return Series::createByStaff($this->me(), $in);
             case 'GET series/:id/check': return Series::check($this->me(), $id);
+            case 'GET series/:id/detail': return Series::detail($this->me(), $id);
             case 'POST series/:id/approve': return Series::approve($this->me(), $id, array_map('strval', (array) ($in['skip_dates'] ?? [])));
             case 'POST series/:id/reject': Series::reject($this->me(), $id, str_opt($in, 'reason')); return null;
             case 'POST series/:id/end': Series::end($this->me(), $id, (string) ($in['from'] ?? Clock::today())); return Series::get($id);
@@ -125,7 +127,7 @@ final class Api
             case 'POST entries/:id/delete': Events::removeEntry($this->me(), $id); return null;
 
             // ---------- novac, dan ----------
-            case 'GET day': $this->staff('day.view'); $d = (string) ($q['date'] ?? Clock::today()); return ['date' => $d, 'closed' => Db::one('SELECT d.*, TRIM(CONCAT(u.first_name,\' \',u.last_name)) by_name FROM day_closes d LEFT JOIN users u ON u.id = d.closed_by WHERE day = ?', [$d]), 'totals' => DayClose::totals($d), 'blockers' => DayClose::blockers($d)];
+            case 'GET day': $this->staff('day.view'); $d = (string) ($q['date'] ?? Clock::today()); return ['open_later' => DayClose::openLater($d), 'payment_day' => DayClose::paymentDay(), 'date' => $d, 'closed' => Db::one('SELECT d.*, TRIM(CONCAT(u.first_name,\' \',u.last_name)) by_name FROM day_closes d LEFT JOIN users u ON u.id = d.closed_by WHERE day = ?', [$d]), 'totals' => DayClose::totals($d), 'blockers' => DayClose::blockers($d)];
             case 'POST day/close': return DayClose::close($this->me(), (string) ($in['date'] ?? Clock::today()));
             case 'POST payments/:id/correct': return Cash::correct($this->me(), $id, isset($in['new_amount']) && $in['new_amount'] !== '' ? Money::parse((string) $in['new_amount']) : null, (string) ($in['reason'] ?? ''));
             case 'POST debts/:id/forgive': Cash::forgiveDebt($this->me(), $id, (string) ($in['reason'] ?? '')); return null;
@@ -137,7 +139,10 @@ final class Api
             case 'GET prices': $this->staff('res.read'); return ['current' => Pricing::current(), 'history' => Db::all('SELECT * FROM price_versions ORDER BY id DESC')];
             case 'POST prices':
                 $a = $this->staff('prices.manage');
-                $row = ['valid_from_utc' => Clock::nowUtc(), 'recreation_30_cents' => Money::parse((string) $in['recreation_30']), 'recreation_min_cents' => Money::parse((string) $in['recreation_min']), 'shoes_cents' => Money::parse((string) $in['shoes']),
+                $cur = Pricing::current();
+                $row = ['monthly_remainder_30_cents' => isset($in['monthly_remainder_30']) && $in['monthly_remainder_30'] !== '' ? Money::parse((string) $in['monthly_remainder_30']) : (int) $cur['monthly_remainder_30_cents'],
+                    'monthly_remainder_min_cents' => isset($in['monthly_remainder_min']) && $in['monthly_remainder_min'] !== '' ? Money::parse((string) $in['monthly_remainder_min']) : (int) $cur['monthly_remainder_min_cents'],
+                    'valid_from_utc' => Clock::nowUtc(), 'recreation_30_cents' => Money::parse((string) $in['recreation_30']), 'recreation_min_cents' => Money::parse((string) $in['recreation_min']), 'shoes_cents' => Money::parse((string) $in['shoes']),
                     'training_lane_hour_cents' => Money::parse((string) $in['training_lane_hour']), 'monthly_cents' => Money::parse((string) $in['monthly']), 'note' => str_opt($in, 'note'), 'created_by' => $a['id']];
                 $pid = Db::insert('price_versions', $row); Audit::log('prices.new_version', 'price_version', $pid, $row); return Pricing::current();
             case 'GET staff-accounts': $this->owner(); return array_map(fn($u) => Auth::publicUser($u) + ['perms' => Perms::forUser($u)], Db::all("SELECT * FROM users WHERE role IN ('owner','manager','staff') ORDER BY FIELD(role,'owner','manager','staff'), id"));
@@ -156,6 +161,19 @@ final class Api
             case 'POST outbox/:id/requeue': $this->staff('settings.manage'); Notify::requeue($id); return null;
             case 'POST outbox/run': $this->staff('settings.manage'); return Notify::work();
             case 'GET audit': $this->staff('audit.view'); return Db::all('SELECT * FROM audit_log' . (isset($q['entity']) ? ' WHERE entity = ? AND entity_id = ?' : '') . ' ORDER BY id DESC LIMIT 300', isset($q['entity']) ? [$q['entity'], (string) ($q['id'] ?? '')] : []);
+            case 'POST backup/run':
+                $this->owner(); require_once dirname(__DIR__) . '/tools/backup-lib.php';
+                $f = Backup::dump(Config::dataDir() . '/backup'); Audit::log('backup.manual', 'backup', basename($f));
+                return ['file' => basename($f), 'bytes' => filesize($f)];
+            case 'GET backup/list':
+                $this->owner(); $fs = array_merge(glob(Config::dataDir() . '/backup/arena-rs-*.sql.gz') ?: [], glob(Config::dataDir() . '/backup/arena-rs-*.sqlite.gz') ?: []); rsort($fs);
+                return array_map(fn($f) => ['file' => basename($f), 'bytes' => filesize($f)], $fs);
+            case 'GET backup/download':
+                $this->owner(); $name = basename((string) ($q['file'] ?? ''));
+                $f = Config::dataDir() . '/backup/' . $name;
+                if (!preg_match('/^arena-rs-[0-9-]+\.(sql|sqlite)\.gz$/', $name) || !is_file($f)) throw new AppError('Backup ne postoji.', 404);
+                Audit::log('backup.downloaded', 'backup', $name);
+                return ['__file' => $f, 'name' => $name];
             case 'GET dev/codes':
                 if (Config::get('env') === 'prod') throw new AppError('Nije dostupno.', 404);
                 return Db::all("SELECT id, to_addr, body, status, created_utc FROM outbox WHERE type = 'verify_code' ORDER BY id DESC LIMIT 20");

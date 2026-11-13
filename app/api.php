@@ -117,6 +117,7 @@ final class Api
             case 'POST statements': return Statements::create($this->me(), (int) ($in['club_id'] ?? 0), !empty($in['reservation_id']) ? (int) $in['reservation_id'] : null);
             case 'GET statements/:id': $this->staff('clubs.billing'); return Statements::get($id);
             case 'GET statements/:id/pdf': $this->staff('clubs.billing'); $s = Statements::get($id); return ['__file' => $s['pdf_path'], 'name' => $s['number'] . '.pdf'];
+            case 'POST statements/:id/send-email': return Statements::sendEmail($this->me(), $id);
 
             // ---------- događaji ----------
             case 'GET events': $this->staff('res.read'); return Events::list((string) ($q['from'] ?? Clock::today()), (string) ($q['to'] ?? T::addDays(Clock::today(), 90)));

@@ -355,6 +355,26 @@ test('Klubovi: trening na račun kluba, utakmica, obračun', function () {
     ok((bool) Db::val('SELECT processed_utc FROM reservations WHERE id = ?', [$t['id']]), 'održan trening automatski evidentiran');
 });
 
+test('Obračun kluba bez emaila: ostaje sačuvan, kasnije slanje bez ponovnog obračuna', function () {
+    $o = mkuser('Vlasnik', '060000009', 'owner');
+    $zr = (int) Db::val("SELECT id FROM clubs WHERE short = 'Zrinski'");
+    ok(Db::val('SELECT email FROM clubs WHERE id = ?', [$zr]) === null, 'klub nema unesen email');
+    $p = mkuser('Igrač Z', '064000099', 'guest', $zr);
+    $t = book($p, '2026-11-16 10:00', 60, 1);
+    Clock::set('2026-11-16 11:30:00');
+    as_($o);
+    $st = Statements::create($o, $zr);
+    eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'club_statement'"), 0, 'bez emaila: ništa se ne stavlja u red (ne tvrdi se da je poslano)');
+    ok(is_file($st['pdf_path']), 'PDF je ipak napravljen i sačuvan');
+    throws(fn() => Statements::sendEmail($o, (int) $st['id']), 'slanje bez emaila odbijeno s jasnom porukom', 'nema unesen email');
+    Db::update('clubs', ['email' => 'zrinski@example.test'], 'id = ?', [$zr]);
+    $after = Statements::sendEmail($o, (int) $st['id']);
+    eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'club_statement' AND to_addr = 'zrinski@example.test'"), 1, 'naknadno slanje kreira poruku tek kad email postoji');
+    eq(count($after['items']), 1, 'iste stavke (nije ponovo obračunato)');
+    eq((int) Db::val("SELECT COUNT(*) FROM club_statement_items WHERE statement_id = ?", [$st['id']]), 1, 'broj stavki se nije udvostručio');
+    throws(fn() => Statements::create($o, $zr), 'stavka ostaje samo u ovom obračunu — nema novog dok nema novih treninga', 'Nema');
+});
+
 test('Stalni klupski termini: pravilo, izuzeci, bez beskonačnih redova', function () {
     $o = mkuser('Vlasnik', '060000009', 'owner');
     $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");

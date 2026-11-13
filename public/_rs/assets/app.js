@@ -648,7 +648,13 @@ const ADMIN = {
     const mk = async (rid) => { if (!await ask(rid ? 'Napraviti izdvojeni obračun ove utakmice?' : 'Napraviti obračun za ' + km(total) + '?')) return; try { const s = await api('POST', 'statements', { club_id: club, reservation_id: rid || null }); toast('Obračun ' + s.number + ' napravljen' + (s.club_email ? ' · email u redu slanja' : ' · klub nema email')); ADMIN.obracuni(v); } catch (e) { errBox($('#e', v), e); } };
     $('#mk', v).onclick = () => mk(null);
     $$('[data-one]', v).forEach((b) => (b.onclick = () => mk(+b.dataset.one)));
-    $$('[data-st]', v).forEach((b) => (b.onclick = async () => { const s = await api('GET', 'statements/' + b.dataset.st); $('#sd', v).innerHTML = '<div class="card"><h3>' + esc(s.number) + '</h3>' + s.items.map((i) => '<div class="sum"><span>' + hDate(i.item_date) + ' · ' + esc(i.description) + ' · ' + esc(i.unit_label) + '</span><span>' + km(i.amount_cents) + '</span></div>').join('') + '<div class="sum total"><span>Ukupno</span><span>' + km(s.total_cents) + '</span></div><p class="rs-small">Email: ' + (s.email_status ? esc({ pending: 'čeka slanje', sending: 'šalje se', sent: 'poslano ' + (s.email_status.sent_utc || ''), failed: 'neuspjelo', not_configured: 'NIJE poslano — kanal nije povezan' }[s.email_status.status]) : 'klub nema email') + '</p></div>'; }));
+    const openStatementDetail = async (sid) => {
+      const s = await api('GET', 'statements/' + sid);
+      const emailLine = s.email_status ? esc({ pending: 'čeka slanje', sending: 'šalje se', sent: 'poslano ' + (s.email_status.sent_utc || ''), failed: 'NIJE poslano — pokušaj neuspio', not_configured: 'NIJE poslano — email servis nije povezan' }[s.email_status.status]) : (s.club_email ? 'još nije pokušano' : 'NIJE poslano — klub nema unesen email');
+      $('#sd', v).innerHTML = '<div class="card"><h3>' + esc(s.number) + '</h3>' + s.items.map((i) => '<div class="sum"><span>' + hDate(i.item_date) + ' · ' + esc(i.description) + ' · ' + esc(i.unit_label) + '</span><span>' + km(i.amount_cents) + '</span></div>').join('') + '<div class="sum total"><span>Ukupno</span><span>' + km(s.total_cents) + '</span></div><p class="rs-small">Email: ' + emailLine + '</p><div id="se"></div><button class="btn sm" id="resend">' + (s.email_status && s.email_status.status === 'sent' ? 'Pošalji ponovo' : 'Pošalji email') + '</button></div>';
+      $('#resend', v).onclick = async () => { try { await api('POST', 'statements/' + sid + '/send-email', {}); openStatementDetail(sid); } catch (e) { errBox($('#se', v), e); } };
+    };
+    $$('[data-st]', v).forEach((b) => (b.onclick = () => openStatementDetail(b.dataset.st)));
   },
 
   async dogadjaji(v) {

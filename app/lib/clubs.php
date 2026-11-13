@@ -326,9 +326,36 @@ final class Statements
         Db::update('club_statements', ['pdf_path' => $path], 'id = ?', [$id]);
         $st['pdf_path'] = $path;
         if ($st['club_email']) {
-            Notify::direct('club_statement', 'email', $st['club_email'], "Poštovani,\n\nu prilogu je obračun {$st['number']} za {$st['club_name']} (ukupno " . Money::fmt((int) $st['total_cents']) . ").\n\nArena Bakarni", 'statement:' . $id, 'Obračun ' . $st['number'] . ' — Arena Bakarni', $path);
+            $oid = Notify::direct('club_statement', 'email', $st['club_email'], "Poštovani,\n\nu prilogu je obračun {$st['number']} za {$st['club_name']} (ukupno " . Money::fmt((int) $st['total_cents']) . ").\n\nArena Bakarni", 'statement:' . $id, 'Obračun ' . $st['number'] . ' — Arena Bakarni', $path);
+            Notify::sendNow($oid);
         }
         return $st;
+    }
+
+    /**
+     * (Ponovno) slanje emaila obračuna — bez ponovnog obračunavanja stavki (one su već trajno upisane).
+     * Koristi se kad klub pri izradi obračuna nije imao email (pa se nije ni pokušalo slati), ili kad treba
+     * ponovo poslati poslije neuspjeha. Obračun ostaje sačuvan i dostupan bez obzira na uspjeh slanja.
+     */
+    public static function sendEmail(array $actor, int $id): array
+    {
+        Perms::require($actor, 'clubs.billing');
+        $st = self::get($id);
+        if (!$st['club_email']) throw new AppError('Klub nema unesen email za obračune. Dodajte ga u profilu kluba (Klubovi → Uredi), pa pokušajte ponovo. Obračun ostaje sačuvan.', 409);
+        if (!$st['pdf_path'] || !is_file($st['pdf_path'])) throw new AppError('PDF obračuna nije pronađen na serveru.', 500);
+        $idem = 'statement:' . $id;
+        $existing = (int) Db::val('SELECT id FROM outbox WHERE idem_key = ?', [$idem . ':' . $st['club_email']]);
+        if ($existing) {
+            Notify::requeue($existing);
+            $oid = $existing;
+        } else {
+            $oid = Notify::direct('club_statement', 'email', $st['club_email'],
+                "Poštovani,\n\nu prilogu je obračun {$st['number']} za {$st['club_name']} (ukupno " . Money::fmt((int) $st['total_cents']) . ").\n\nArena Bakarni",
+                $idem, 'Obračun ' . $st['number'] . ' — Arena Bakarni', $st['pdf_path']);
+        }
+        $status = Notify::sendNow($oid);
+        Audit::log('statement.email_sent_attempt', 'statement', $id, ['to' => $st['club_email'], 'status' => $status]);
+        return self::get($id);
     }
 
     public static function hours(int $min): string { return $min % 60 === 0 ? ($min / 60) . ' h' : number_format($min / 60, 2, ',', '') . ' h'; }

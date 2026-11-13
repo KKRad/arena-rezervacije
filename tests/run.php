@@ -449,6 +449,30 @@ test('Rođendan', function () {
     eq(Reservations::settle($s, $b['id'], ['shoes_used' => true, 'shoe_pairs' => 10])['total_cents'], 3 * 3000 + 1000 * 3, 'rođendan 3 staze × 2 h = 90 KM + 10 pari = 30 KM');
 });
 
+test('Nedolazak na rođendan: otvorena odluka, podesivo i dokumentovano s primjerom', function () {
+    $o = mkuser('Vlasnik', '060000009', 'owner');
+    $s = mkuser('Sank', '060000000', 'staff');
+    $oapi = new Api(Auth::createSession((int) $o['id']));
+    $sapi = new Api(Auth::createSession((int) $s['id']));
+    $p1 = $oapi->handle('GET', 'prices', [], [])[1]['data'];
+    eq($p1['birthday_noshow_debt'], false, 'podrazumijevano: bez automatskog duga (prijedlog)');
+    eq($p1['birthday_noshow_example_cents'], 9000, 'primjer obračuna: 3 staze × 2 h po cijeni rekreacije = 90 KM');
+    $b1 = staffbook($s, ['start' => '2026-11-16 16:00', 'minutes' => 120, 'category' => 'birthday', 'lane_count' => 3, 'guest' => ['phone' => '061 555 777', 'first_name' => 'Tata']]);
+    Clock::set('2026-11-16 16:15:00');
+    as_($s);
+    $r1 = Reservations::markNoShow($s, $b1['id'], true);
+    eq($r1['no_show_result'], ['debt' => null, 'warning' => false], 'isključeno: nedolazak na rođendan ne pravi dug');
+    eq($sapi->handle('POST', 'settings/birthday-debt', [], ['enabled' => true])[0], 403, 'šank ne mijenja ovu postavku');
+    eq($oapi->handle('POST', 'settings/birthday-debt', [], ['enabled' => true])[0], 200, 'vlasnik uključuje postavku');
+    eq($oapi->handle('GET', 'prices', [], [])[1]['data']['birthday_noshow_debt'], true, 'postavka je sada uključena');
+    Clock::set('2026-11-16 18:00:00');
+    $b2 = staffbook($s, ['start' => '2026-11-16 19:00', 'minutes' => 120, 'category' => 'birthday', 'lane_count' => 3, 'guest' => ['phone' => '061 555 777', 'first_name' => 'Tata']]);
+    Clock::set('2026-11-16 19:15:00');
+    as_($s);
+    $r2 = Reservations::markNoShow($s, $b2['id'], true);
+    eq($r2['no_show_result']['debt']['amount_cents'], 9000, 'uključeno: dug tačno po primjeru iz Cijena (90 KM)');
+});
+
 test('Dnevni obračun i zabrana zaključivanja neriješenog dana', function () {
     $s = mkuser('Sank', '060000000', 'staff');
     $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");

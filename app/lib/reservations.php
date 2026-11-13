@@ -258,6 +258,12 @@ final class Reservations
                     $debtId = Db::insert('debts', ['user_id' => $r['user_id'], 'reservation_id' => $id, 'amount_cents' => $amount, 'reason' => 'Nedolazak ' . T::human($r['start_at']) . ' (' . count($r['lanes']) . ' staza)', 'created_utc' => Clock::nowUtc()]);
                     $res['debt'] = ['id' => $debtId, 'amount_cents' => $amount];
                 }
+            } elseif ($r['category'] === 'birthday' && $r['user_id'] && Settings::get('birthday_noshow_debt') === '1') {
+                // Otvorena poslovna odluka (isključeno podrazumijevano) — vidi Administracija → Cijene.
+                $pv = Pricing::version((int) $r['price_version_id']);
+                $amount = Pricing::laneCash(T::minutes($r['start_at'], $r['end_at']), $pv) * count($r['lanes']);
+                $debtId = Db::insert('debts', ['user_id' => $r['user_id'], 'reservation_id' => $id, 'amount_cents' => $amount, 'reason' => 'Nedolazak na rođendan ' . T::human($r['start_at']) . ' (' . count($r['lanes']) . ' staza)', 'created_utc' => Clock::nowUtc()]);
+                $res['debt'] = ['id' => $debtId, 'amount_cents' => $amount];
             }
             Db::update('reservations', ['attendance' => 'no_show', 'attendance_utc' => Clock::nowUtc(), 'attendance_by' => Audit::$actor['id'] ?? null, 'released_at' => $releasedAt, 'processed_utc' => Clock::nowUtc(), 'processed_by' => Audit::$actor['id'] ?? null], 'id = ?', [$id]);
             Audit::log('reservation.no_show', 'reservation', $id, $res + ['released_from' => $releasedAt]);

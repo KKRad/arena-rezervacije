@@ -137,7 +137,15 @@ final class Api
 
             // ---------- vlasnik ----------
             case 'GET stats': $this->staff('stats.view'); return Stats::compare((string) ($q['from'] ?? T::addDays(Clock::today(), -29)), (string) ($q['to'] ?? Clock::today()));
-            case 'GET prices': $this->staff('res.read'); return ['current' => Pricing::current(), 'history' => Db::all('SELECT * FROM price_versions ORDER BY id DESC')];
+            case 'GET prices':
+                $this->staff('res.read'); $pv = Pricing::current();
+                return ['current' => $pv, 'history' => Db::all('SELECT * FROM price_versions ORDER BY id DESC'),
+                    'birthday_noshow_debt' => Settings::get('birthday_noshow_debt') === '1',
+                    'birthday_noshow_example_cents' => Pricing::laneCash(120, $pv) * 3];
+            case 'POST settings/birthday-debt':
+                $this->staff('prices.manage'); Settings::set('birthday_noshow_debt', !empty($in['enabled']) ? '1' : '0');
+                Audit::log('settings.birthday_noshow_debt', 'settings', null, ['enabled' => !empty($in['enabled'])]);
+                return null;
             case 'POST prices':
                 $a = $this->staff('prices.manage');
                 $cur = Pricing::current();

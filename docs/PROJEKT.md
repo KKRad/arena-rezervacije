@@ -59,9 +59,9 @@ Objava postojećeg sajta (zip) mijenja `public_html`; zato `tools/package.py` po
 - Klik na slobodan termin → ako nije prijavljen: „Prijavite se za rezervaciju“.
 
 ### 1.2 Nalog — `/nalog`
-- **Registracija:** ime, prezime, telefon, email, lozinka → SMS kod → potvrda. Ako profil s tim telefonom već postoji (unijelo ga osoblje, bez lozinke) → povezuje se s njim (bez duplikata). Ako postoji aktivan nalog → „Broj je već registrovan — prijavite se ili oporavite lozinku“.
+- **Registracija:** ime, prezime, telefon, email, lozinka → kod se šalje na **email** → potvrda. Ako profil s tim telefonom već postoji (unijelo ga osoblje, bez lozinke) → povezuje se s njim (bez duplikata). Ako postoji aktivan nalog → „Broj je već registrovan — prijavite se ili oporavite lozinku“. *(Odluka 13.11.2026: potvrda ide emailom, ne SMS-om — ne traži plaćeni servis, dovoljan je postojeći email nalog; prijava ostaje telefon + lozinka, nepromijenjeno.)*
 - **Prijava:** telefon + lozinka (osoblje može i korisničkim imenom, npr. `sank`).
-- **Oporavak lozinke:** telefon → kod na potvrđeni telefon → nova lozinka.
+- **Oporavak lozinke:** unese se telefon (isti kao za prijavu) → kod se šalje na potvrđeni email s naloga → nova lozinka. Ne otkriva se da li broj postoji, niti koji je email na njega vezan.
 - **Moj nalog:** buduće i prethodne rezervacije (izmijeni / otkaži / produži), mjesečna i datum isteka, preostali redovni sati ove sedmice i bonus sati (s historijom), lični dug i upozorenja, dugmad „Želim mjesečnu“ / „Želim produžiti“, za člana kluba klupski treninzi (bez cijena i obračuna), zahtjev za stalni klupski termin.
 - **Tok rezervacije:** klik na slobodan termin → izbor trajanja (60/90/120), broja staza ili konkretnih staza → za člana kluba prekidač „Trening (na račun kluba)“ / „Nije trening — plaćam lično“ → prikaz pokrića i cijene (npr. „1 h iz mjesečne + 30 min 7,50 KM“) → Potvrdi. Rezervacija je odmah potvrđena.
 - Blokiran nalog: sve vidi, ne može praviti nove rezervacije.
@@ -198,10 +198,10 @@ Historija bilježi nalog koji je radnju napravio; za zajednički nalog piše „
 
 | Tabela | Ključna polja | Napomena |
 |---|---|---|
-| `users` | id, first_name, last_name, phone (E.164, UNIQUE), phone_verified_at, email, password_hash, username (osoblje, UNIQUE), role (`owner/manager/staff/guest`), club_id, blocked_at/by/reason, created_by | profil bez lozinke = unijelo osoblje |
+| `users` | id, first_name, last_name, phone (E.164, UNIQUE), email, email_verified_at, password_hash, username (osoblje, UNIQUE), role (`owner/manager/staff/guest`), club_id, blocked_at/by/reason, created_by | profil bez lozinke = unijelo osoblje; potvrda naloga ide emailom (migracija 003) |
 | `user_permissions` | user_id, perm | PK (user_id, perm) |
 | `sessions` | token_hash, user_id, expires_at, ip, ua | |
-| `verification_codes` | phone, purpose, code_hash, expires_at, attempts, used_at | |
+| `verification_codes` | email (kanal na koji se šalje kod), phone (evidencija), purpose, code_hash, expires_at, attempts, used_at | |
 | `rate_limits` | bucket, hits, window_start | prijava, kodovi |
 | `lanes` | id 1–6, name, short | |
 | `clubs` | name, email, short, category_code, match_price_mode (`fixed/lane_hour`), match_fixed_cents, match_lane_hour_cents, active | |
@@ -249,12 +249,13 @@ Historija bilježi nalog koji je radnju napravio; za zajednički nalog piše „
 
 ## 6. Stvarno otvorene odluke (s predloženim podrazumijevanim rješenjem — implementirano je podrazumijevano)
 
-1. **SMS servis za kodove i obavijesti.** Bez njega registracija i oporavak lozinke ne mogu raditi u produkciji. *Podrazumijevano:* razvojni prikaz poruka; prije objave odabrati dobavljača (npr. Infobip/Twilio za SMS; Viber/WhatsApp za obavijesti) — adapter je spreman.
+1. **Email servis za potvrdu naloga.** *Odlučeno 13.11.2026:* registracija i oporavak lozinke koriste potvrđeni email (ne SMS) — povezuje se postojeći email nalog preko SMTP-a, bez kupovine servisa (`channels.email` u config.php) + `registration_enabled` tek kad je kanal provjeren. Obavijesti gostima/osoblju (SMS/Viber/WhatsApp/Telegram) ostaju posebna, kasnija odluka — nisu uslov da registracija i rezervisanje rade.
 2. **Email za obračune klubova.** *Podrazumijevano:* SMTP sanduče na arenabrcko.com (npr. `obracuni@arenabrcko.com`, Hostinger mail); dok nije podešeno, email s PDF-om čeka u redu sa statusom „nije poslano“.
 3. **Nepokriveni dio termina uz mjesečnu** (npr. 2 h rezervacija, 1,5 h pokriveno): *implementirani prijedlog, NIJE potvrđena odluka vlasnika* — 7,50 KM po započetih 30 min, **bez** minimuma od 15 KM (minimum važi samo za stazu bez ikakvog pokrića). Podesivo u Cijenama (iznos i minimum); primjeri u 2.4.
 4. **Produženje mjesečne prije isteka.** Po specifikaciji: novi period počinje danom potvrđene uplate; preostali dani starog perioda ne prelaze u novi. Prije potvrde se prikazuje novi istek i upozorenje (obavezna potvrda). Pravilo nije mijenjano; alternativa ostaje odluka vlasnika.
-5. **Nedolazak na rođendan / utakmicu:** specifikacija propisuje dug samo za rekreaciju. *Podrazumijevano:* rođendan bez automatskog duga (osoblje može evidentirati ručno), utakmica/trening nemaju nedolazak.
+5. **Nedolazak na rođendan / utakmicu:** specifikacija propisuje dug samo za rekreaciju. *Podrazumijevano (i dalje nije posebno potvrđena odluka vlasnika):* rođendan bez automatskog duga; utakmica/trening nemaju nedolazak. Sada **podesivo** uključivanje/isključivanje u Administracija → Cijene (prekidač + primjer obračuna uživo), bez diranja same specifikacije.
 6. **Trajanje online rezervacije duže od 120 min:** *podrazumijevano* gost bira 60/90/120 (i produžava ako ima mjesta); osoblje može unijeti bilo koje trajanje u koracima od 30 min.
 7. **Objava:** proba radi na `aliceblue-eagle-979980.hostingersite.com`. Konačna objava na arenabrcko.com i prelazak dugmeta sa Sportina — tek uz odobrenje vlasnika.
 8. **Proba:** od 12.11.2026 zaseban sajt https://aliceblue-eagle-979980.hostingersite.com (Premium paket). Otvoreno: gašenje stare probe i eventualna adresa proba.arenabrcko.com.
-9. **Baza na hostingu:** MySQL (preporuka za produkciju) ili SQLite (trenutno za probu).
+9. **Baza na hostingu:** MySQL (preporuka za produkciju) ili SQLite (trenutno za probu). Prenos probne SQLite baze u MySQL je pripremljen i provjeren (`tools/sqlite-to-mysql.php` — prenosi sve kategorije podataka i pokreće aplikaciju nad prenesenom bazom prije uključivanja; izvorna baza se ne dira).
+10. **Telegram** (spomenut u specifikaciji uz plan objave): tehnički lako dodati kao još jedan `Notify` kanal (HTTPS POST, isti obrazac kao postojeći HTTP adapter), ali namjerno nije rađeno u ovoj reviziji — obavijesti su, po dogovoru, ostavljene za kasnije.

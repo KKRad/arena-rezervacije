@@ -32,7 +32,7 @@ $c = []; foreach (['owner', 'manager', 'staff', 'guest', 'guest2'] as $r) { $c[$
 
 echo "• Priprema probnih termina ($day)\n";
 [$st, $g1] = $c['guest']->req('POST', 'reservations', ['start' => "$day 12:00", 'minutes' => 60, 'lanes' => [1]]);
-check($st === 200 && ($g1['data']['category'] ?? '') === 'recreation', 'gost rezerviše (rekreacija)');
+check($st === 200 && in_array($g1['data']['category'] ?? '', ['recreation', 'monthly'], true), 'gost rezerviše (rekreacija ili mjesečna ako je gost u međuvremenu dobio mjesečnu kartu)');
 [$st, $cl] = $c['guest2']->req('POST', 'reservations', ['start' => "$day 13:00", 'minutes' => 120, 'lanes' => [2, 3]]);
 check($st === 200 && ($cl['data']['category'] ?? '') === 'training', 'član kluba: trening na račun kluba');
 check(!array_key_exists('club_amount_cents', $cl['data'] ?? []) && !array_key_exists('billing', $cl['data'] ?? []), 'član ne vidi cijenu ni obračun treninga');
@@ -50,7 +50,7 @@ $anon = client($base);
 [$st, $pub] = $anon->req('GET', 'calendar/day?date=' . $day);
 $js = json_encode($pub, JSON_UNESCAPED_UNICODE);
 $cats = array_column($pub['data']['blocks'], 'category');
-check(in_array('recreation', $cats, true) && in_array('training', $cats, true) && in_array($rad['match_category'], $cats, true) && in_array('qualification', $cats, true), 'javno: kategorije svih termina');
+check((in_array('recreation', $cats, true) || in_array('monthly', $cats, true)) && in_array('training', $cats, true) && in_array($rad['match_category'], $cats, true) && in_array('qualification', $cats, true), 'javno: kategorije svih termina');
 check(str_contains($js, 'KK Rad – KK Gost Proba') && str_contains($js, 'Probna liga'), 'javno: klubovi i liga utakmice');
 $q = array_values(array_filter($pub['data']['blocks'], fn($b) => $b['type'] === 'event'))[0] ?? [];
 $free = count(array_filter($q['positions'] ?? [], fn($p) => $p['player_name'] === null));

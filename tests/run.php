@@ -589,19 +589,19 @@ test('Pristup bez ovlaštenja (server odbija, ne samo skrivena dugmad)', functio
     eq($gdet[0], 403, 'gost ne vidi tuđu rezervaciju');
 });
 
-test('Produkcija: bez koda na ekranu i bez javne registracije dok SMS nije povezan', function () {
+test('Produkcija: bez koda na ekranu i bez javne registracije dok email nije povezan', function () {
     $base = Config::all();
     Config::load(array_merge($base, ['env' => 'prod', 'channels' => []]));
     $api = new Api(null, '9.9.9.9');
     [$st, $res] = $api->handle('POST', 'auth/register', [], ['first_name' => 'A', 'last_name' => 'B', 'phone' => '062 111 222', 'email' => 'a@example.test', 'password' => 'lozinka12345']);
-    eq($st, 503, 'produkcija bez SMS-a: registracija isključena');
-    eq($api->handle('POST', 'auth/reset', [], ['phone' => '062 111 222'])[0], 503, 'produkcija bez SMS-a: oporavak isključen');
+    eq($st, 503, 'produkcija bez emaila: registracija isključena');
+    eq($api->handle('POST', 'auth/reset', [], ['phone' => '062 111 222'])[0], 503, 'produkcija bez emaila: oporavak isključen');
     eq($api->handle('GET', 'me', [], [])[1]['data']['registration'], false, 'ekran zna da registracija nije dostupna');
     Config::load(array_merge($base, ['env' => 'prod', 'registration_enabled' => true, 'channels' => []]));
     eq((new Api(null))->handle('POST', 'auth/reset', [], ['phone' => '062 111 222'])[0], 503, 'uključeno, ali kanal nije povezan: i dalje isključeno');
-    Config::load(array_merge($base, ['env' => 'prod', 'registration_enabled' => true, 'channels' => ['sms' => ['adapter' => 'http', 'url' => 'http://127.0.0.1:9/x']]]));
+    Config::load(array_merge($base, ['env' => 'prod', 'registration_enabled' => true, 'channels' => ['email' => ['adapter' => 'http', 'url' => 'http://127.0.0.1:9/x']]]));
     [$st, $res] = (new Api(null))->handle('POST', 'auth/register', [], ['first_name' => 'A', 'last_name' => 'B', 'phone' => '062 111 223', 'email' => 'a@example.test', 'password' => 'lozinka12345']);
-    eq([$st, array_key_exists('dev_code', $res['data']) ? $res['data']['dev_code'] : 'nema', $res['data']['sms']], [200, null, 'pending'], 'produkcija: kod se NE vraća na ekran; neuspjelo slanje nije „poslano“');
+    eq([$st, array_key_exists('dev_code', $res['data']) ? $res['data']['dev_code'] : 'nema', $res['data']['code_status']], [200, null, 'pending'], 'produkcija: kod se NE vraća na ekran; neuspjelo slanje nije „poslano“');
     eq((new Api(null))->handle('GET', 'dev/codes', [], [])[0], 404, 'produkcija: razvojni pregled kodova ne postoji');
     Config::load($base);
 });
@@ -617,9 +617,9 @@ test('Nalozi: registracija, povezivanje profila, prijava, oporavak, ograničenja
     eq($st, 200, 'registracija start');
     $code = $res['data']['dev_code'];
     eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'verify_code' AND status = 'not_configured'"), 1, 'kod odmah obrađen: bez kanala status nije poslano');
-    eq($res['data']['sms'], 'not_configured', 'ekran dobija stvarni status SMS-a');
-    eq($api->handle('POST', 'auth/confirm', [], ['phone' => '065123456', 'code' => '000000' === $code ? '111111' : '000000'])[0], 400, 'pogrešan kod');
-    [$st] = $api->handle('POST', 'auth/confirm', [], ['phone' => '065123456', 'code' => $code]);
+    eq($res['data']['code_status'], 'not_configured', 'ekran dobija stvarni status slanja koda');
+    eq($api->handle('POST', 'auth/confirm', [], ['email' => 'p@example.test', 'code' => '000000' === $code ? '111111' : '000000'])[0], 400, 'pogrešan kod');
+    [$st] = $api->handle('POST', 'auth/confirm', [], ['email' => 'p@example.test', 'code' => $code]);
     eq($st, 200, 'potvrda koda');
     eq((int) Db::val('SELECT COUNT(*) FROM users WHERE phone = ?', ['+38765123456']), 1, 'nema duplikata — povezan s profilom osoblja');
     eq($api->handle('POST', 'auth/login', [], ['login' => '065/123-456', 'password' => 'tajna12345'])[0], 200, 'prijava telefonom (drugi zapis)');
@@ -629,6 +629,15 @@ test('Nalozi: registracija, povezivanje profila, prijava, oporavak, ograničenja
     eq($api->handle('POST', 'auth/reset-confirm', [], ['phone' => '065123456', 'code' => $rr['data']['dev_code'], 'password' => 'novalozinka1'])[0], 200, 'oporavak lozinke kodom');
     eq($api->handle('POST', 'auth/login', [], ['login' => '065123456', 'password' => 'novalozinka1'])[0], 200, 'prijava novom lozinkom');
     ok(!str_contains((string) Db::val('SELECT password_hash FROM users WHERE phone = ?', ['+38765123456']), 'novalozinka1'), 'lozinka nije u čistom tekstu');
+    // Potpuna nova registracija (bez staff profila) + prva rezervacija — glavni put koji mora raditi.
+    $api2 = new Api(null, '1.2.3.5');
+    [$st, $r1] = $api2->handle('POST', 'auth/register', [], ['first_name' => 'Nova', 'last_name' => 'Korisnica', 'phone' => '061 555 666', 'email' => 'nova@example.test', 'password' => 'sigurna12345']);
+    eq($st, 200, 'nova registracija start (bez postojećeg profila)');
+    [$st, $r2] = $api2->handle('POST', 'auth/confirm', [], ['email' => 'nova@example.test', 'code' => $r1['data']['dev_code']]);
+    eq($st, 200, 'nova registracija potvrđena emailom');
+    $api3 = new Api($api2->setToken);
+    [$st, $r3] = $api3->handle('POST', 'reservations', [], ['start' => '2026-11-18 18:00', 'minutes' => 60, 'lane_count' => 1]);
+    eq([$st, $r3['data']['category']], [200, 'recreation'], 'nova korisnica odmah može rezervisati termin');
 });
 
 test('Javni kalendar ne otkriva privatne podatke; verzija cijene', function () {

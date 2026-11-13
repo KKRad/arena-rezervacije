@@ -86,8 +86,8 @@ final class Auth
     public static ?array $user = null;
     /** U testovima: posljednji poslani kod (samo dev/test okruženje). */
     public static ?string $lastCode = null;
-    /** Stvarni status slanja posljednjeg koda: sent | not_configured | failed | pending. */
-    public static ?string $lastSmsStatus = null;
+    /** Stvarni status slanja posljednjeg koda (email): sent | not_configured | failed | pending. */
+    public static ?string $lastCodeStatus = null;
 
     public static function userById(int $id): ?array { return Db::one('SELECT * FROM users WHERE id = ?', [$id]); }
     public static function userByPhone(string $phone): ?array { return Db::one('SELECT * FROM users WHERE phone = ?', [$phone]); }
@@ -106,28 +106,29 @@ final class Auth
         if (mb_strlen($p) > 200) throw new AppError('Lozinka je predugačka.');
     }
 
-    private static function newCode(string $phone, string $purpose, ?array $payload): string
+    /** Kod se šalje na $email (potvrđeni kanal); $phone se čuva uz kod samo radi evidencije/debaga. */
+    private static function newCode(string $email, string $purpose, ?array $payload, ?string $phone = null): string
     {
-        if (!RateLimit::hit("code:$purpose:$phone", 3, 3600)) throw new AppError('Previše zahtjeva za kod. Pokušajte ponovo za sat vremena.', 429);
+        if (!RateLimit::hit("code:$purpose:$email", 3, 3600)) throw new AppError('Previše zahtjeva za kod. Pokušajte ponovo za sat vremena.', 429);
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        Db::q('UPDATE verification_codes SET used_utc = ? WHERE phone = ? AND purpose = ? AND used_utc IS NULL', [Clock::nowUtc(), $phone, $purpose]);
+        Db::q('UPDATE verification_codes SET used_utc = ? WHERE email = ? AND purpose = ? AND used_utc IS NULL', [Clock::nowUtc(), $email, $purpose]);
         $id = Db::insert('verification_codes', [
-            'phone' => $phone, 'purpose' => $purpose, 'code_hash' => hash('sha256', $code . '|' . $phone),
+            'phone' => $phone ?? '', 'email' => $email, 'purpose' => $purpose, 'code_hash' => hash('sha256', $code . '|' . $email),
             'payload' => $payload ? json_encode($payload, JSON_UNESCAPED_UNICODE) : null,
             'created_utc' => Clock::nowUtc(), 'expires_utc' => Clock::utcPlus('+15 minutes'),
         ]);
-        $oid = Notify::direct('verify_code', 'sms', $phone, "Arena Bakarni: vaš kod je $code (važi 15 minuta).", "code:$id");
-        self::$lastSmsStatus = Notify::sendNow($oid);
+        $oid = Notify::direct('verify_code', 'email', $email, "Arena Bakarni: vaš kod je $code (važi 15 minuta).", "code:$id", 'Arena Bakarni — potvrda');
+        self::$lastCodeStatus = Notify::sendNow($oid);
         if (Config::get('env') !== 'prod') self::$lastCode = $code;
         return $code;
     }
 
-    private static function checkCode(string $phone, string $purpose, string $code): array
+    private static function checkCode(string $email, string $purpose, string $code): array
     {
-        $row = Db::one('SELECT * FROM verification_codes WHERE phone = ? AND purpose = ? AND used_utc IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE', [$phone, $purpose]);
+        $row = Db::one('SELECT * FROM verification_codes WHERE email = ? AND purpose = ? AND used_utc IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE', [$email, $purpose]);
         if (!$row || $row['expires_utc'] < Clock::nowUtc()) throw new AppError('Kod je istekao ili ne postoji. Zatražite novi.');
         if ((int) $row['attempts'] >= 5) throw new AppError('Previše pogrešnih pokušaja. Zatražite novi kod.', 429);
-        if (!hash_equals($row['code_hash'], hash('sha256', trim($code) . '|' . $phone))) {
+        if (!hash_equals($row['code_hash'], hash('sha256', trim($code) . '|' . $email))) {
             Db::q('UPDATE verification_codes SET attempts = attempts + 1 WHERE id = ?', [$row['id']]);
             throw new AppError('Pogrešan kod.');
         }
@@ -135,15 +136,15 @@ final class Auth
         return $row;
     }
 
-    /** Registracija/oporavak putem telefona: u produkciji tek kad je SMS kanal povezan I izričito uključeno ('registration_enabled' => true). */
+    /** Registracija/oporavak putem emaila: u produkciji tek kad je email kanal povezan I izričito uključeno ('registration_enabled' => true). */
     public static function registrationOpen(): bool
     {
         if (Config::get('env') !== 'prod') return true;
-        return Config::get('registration_enabled') === true && Notify::channel('sms') !== null;
+        return Config::get('registration_enabled') === true && Notify::channel('email') !== null;
     }
     private static function requireRegistration(): void
     {
-        if (!self::registrationOpen()) throw new AppError('Registracija i oporavak lozinke putem telefona još nisu uključeni. Za rezervaciju se obratite Areni.', 503);
+        if (!self::registrationOpen()) throw new AppError('Registracija i oporavak lozinke još nisu uključeni. Za rezervaciju se obratite Areni.', 503);
     }
 
     public static function registerStart(array $in): array
@@ -155,31 +156,32 @@ final class Auth
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) throw new AppError('Neispravan email.');
         $pass = (string) ($in['password'] ?? ''); self::validatePassword($pass);
         $ex = self::userByPhone($phone);
-        if ($ex && $ex['password_hash'] && $ex['phone_verified_utc']) throw new AppError('Ovaj broj je već registrovan. Prijavite se ili oporavite lozinku.', 409);
-        self::newCode($phone, 'register', ['first_name' => $first, 'last_name' => $last, 'email' => $email, 'password_hash' => password_hash($pass, PASSWORD_DEFAULT)]);
-        return ['phone' => $phone];
+        if ($ex && $ex['password_hash'] && $ex['email_verified_utc']) throw new AppError('Ovaj broj je već registrovan. Prijavite se ili oporavite lozinku.', 409);
+        self::newCode($email, 'register', ['phone' => $phone, 'first_name' => $first, 'last_name' => $last, 'email' => $email, 'password_hash' => password_hash($pass, PASSWORD_DEFAULT)], $phone);
+        return ['email' => $email];
     }
 
-    /** Potvrda telefona. Ako profil s tim brojem postoji (napravilo ga osoblje), povezuje se bez dupliranja. */
+    /** Potvrda emaila. Ako profil s tim telefonom postoji (napravilo ga osoblje), povezuje se bez dupliranja. */
     public static function registerConfirm(array $in): array
     {
-        $phone = Phone::require($in['phone'] ?? null);
-        return Db::tx(function () use ($phone, $in) {
-            $row = self::checkCode($phone, 'register', (string) ($in['code'] ?? ''));
+        $email = str_req($in, 'email', 190);
+        return Db::tx(function () use ($email, $in) {
+            $row = self::checkCode($email, 'register', (string) ($in['code'] ?? ''));
             $p = json_decode((string) $row['payload'], true);
+            $phone = $p['phone'];
             $ex = Db::one('SELECT * FROM users WHERE phone = ? FOR UPDATE', [$phone]);
-            if ($ex && $ex['password_hash'] && $ex['phone_verified_utc']) throw new AppError('Ovaj broj je već registrovan.', 409);
+            if ($ex && $ex['password_hash'] && $ex['email_verified_utc']) throw new AppError('Ovaj broj je već registrovan.', 409);
             if ($ex) {
                 Db::update('users', [
                     'first_name' => $ex['first_name'] ?: $p['first_name'], 'last_name' => $ex['last_name'] ?: $p['last_name'],
-                    'email' => $p['email'], 'password_hash' => $p['password_hash'], 'phone_verified_utc' => Clock::nowUtc(), 'updated_utc' => Clock::nowUtc(),
+                    'email' => $p['email'], 'password_hash' => $p['password_hash'], 'email_verified_utc' => Clock::nowUtc(), 'updated_utc' => Clock::nowUtc(),
                 ], 'id = ?', [$ex['id']]);
                 $id = (int) $ex['id'];
-                Audit::log('user.linked', 'user', $id, ['phone' => $phone]);
+                Audit::log('user.linked', 'user', $id, ['phone' => $phone, 'email' => $email]);
             } else {
                 $id = Db::insert('users', ['first_name' => $p['first_name'], 'last_name' => $p['last_name'], 'phone' => $phone, 'email' => $p['email'],
-                    'password_hash' => $p['password_hash'], 'phone_verified_utc' => Clock::nowUtc(), 'role' => 'guest', 'created_utc' => Clock::nowUtc()]);
-                Audit::log('user.registered', 'user', $id, ['phone' => $phone]);
+                    'password_hash' => $p['password_hash'], 'email_verified_utc' => Clock::nowUtc(), 'role' => 'guest', 'created_utc' => Clock::nowUtc()]);
+                Audit::log('user.registered', 'user', $id, ['phone' => $phone, 'email' => $email]);
             }
             return ['user_id' => $id, 'token' => self::createSession($id)];
         });
@@ -201,20 +203,20 @@ final class Auth
             if (!$u || !$u['password_hash']) password_verify($password, password_hash('dummy-timing', PASSWORD_DEFAULT)); // ujednačeno vrijeme odgovora
             throw new AppError('Pogrešan telefon ili lozinka.', 401);
         }
-        if ($u['role'] === 'guest' && !$u['phone_verified_utc']) throw new AppError('Telefon nije potvrđen.', 401);
+        if ($u['role'] === 'guest' && !$u['email_verified_utc']) throw new AppError('Nalog nije aktiviran — potvrdite email.', 401);
         RateLimit::clear("login:$key");
         if (password_needs_rehash($u['password_hash'], PASSWORD_DEFAULT)) Db::update('users', ['password_hash' => password_hash($password, PASSWORD_DEFAULT)], 'id = ?', [$u['id']]);
         return ['user_id' => (int) $u['id'], 'token' => self::createSession((int) $u['id'])];
     }
 
+    /** Identifikacija kao prijava (telefon); kod ide na potvrđeni email s naloga, bez otkrivanja da li broj postoji. */
     public static function resetStart(array $in): array
     {
         self::requireRegistration();
         $phone = Phone::require($in['phone'] ?? null);
         $u = self::userByPhone($phone);
-        // Isti odgovor bez obzira postoji li nalog (ne otkrivamo registrovane brojeve).
-        if ($u && $u['phone_verified_utc']) self::newCode($phone, 'reset', null);
-        return ['phone' => $phone];
+        if ($u && $u['email_verified_utc'] && $u['email']) self::newCode($u['email'], 'reset', null, $phone);
+        return [];
     }
 
     public static function resetConfirm(array $in): array
@@ -222,9 +224,9 @@ final class Auth
         $phone = Phone::require($in['phone'] ?? null);
         $pass = (string) ($in['password'] ?? ''); self::validatePassword($pass);
         return Db::tx(function () use ($phone, $in, $pass) {
-            self::checkCode($phone, 'reset', (string) ($in['code'] ?? ''));
             $u = self::userByPhone($phone);
-            if (!$u) throw new AppError('Nalog ne postoji.');
+            if (!$u || !$u['email']) throw new AppError('Nalog ne postoji.');
+            self::checkCode($u['email'], 'reset', (string) ($in['code'] ?? ''));
             Db::update('users', ['password_hash' => password_hash($pass, PASSWORD_DEFAULT), 'updated_utc' => Clock::nowUtc()], 'id = ?', [$u['id']]);
             Db::q('DELETE FROM sessions WHERE user_id = ?', [$u['id']]);
             Audit::log('user.password_reset', 'user', $u['id']);
@@ -262,6 +264,6 @@ final class Auth
     {
         return ['id' => (int) $u['id'], 'first_name' => $u['first_name'], 'last_name' => $u['last_name'], 'phone' => $u['phone'], 'phone_pretty' => Phone::pretty($u['phone']),
             'email' => $u['email'], 'username' => $u['username'], 'role' => $u['role'], 'club_id' => $u['club_id'] ? (int) $u['club_id'] : null,
-            'blocked' => $u['blocked_utc'] !== null, 'has_account' => (bool) $u['password_hash'], 'verified' => (bool) $u['phone_verified_utc']];
+            'blocked' => $u['blocked_utc'] !== null, 'has_account' => (bool) $u['password_hash'], 'verified' => (bool) $u['email_verified_utc']];
     }
 }

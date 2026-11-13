@@ -473,11 +473,11 @@ function resTable(list, upcoming) {
 function authForms(root) {
   const back = new URLSearchParams(location.search).get('povratak') || '/nalog/';
   const go = () => { location.href = back.startsWith('/') ? back : '/nalog/'; };
-  root.innerHTML = '<div class="card" style="max-width:520px;margin:10px auto"><div class="tabs"><button data-t="login" class="active">Prijava</button>' + (S.registration ? '<button data-t="reg">Registracija</button><button data-t="reset">Zaboravljena lozinka</button>' : '') + '</div>' + (S.registration ? '' : '<div class="note">Registracija i oporavak lozinke putem telefona još nisu uključeni. Za rezervaciju se obratite Areni.</div>') + '<div id="f"></div></div>';
+  root.innerHTML = '<div class="card" style="max-width:520px;margin:10px auto"><div class="tabs"><button data-t="login" class="active">Prijava</button>' + (S.registration ? '<button data-t="reg">Registracija</button><button data-t="reset">Zaboravljena lozinka</button>' : '') + '</div>' + (S.registration ? '' : '<div class="note">Registracija i oporavak lozinke još nisu uključeni. Za rezervaciju se obratite Areni.</div>') + '<div id="f"></div></div>';
   const f = $('#f', root);
-  // Nikad ne tvrditi da je SMS poslan ako nije (status dolazi sa servera nakon stvarnog pokušaja slanja).
-  const smsNote = (r, okText) => r.sms === 'sent' || (r.sms == null && !r.dev_code) ? '<p>' + okText + '</p>' : r.sms === 'not_configured' ? '<p class="rs-muted">SMS servis još nije povezan — poruka nije poslana.</p>' : r.sms === 'failed' ? '<div class="note bad">Slanje SMS-a trenutno nije uspjelo. Pokušajte ponovo za minut.</div>' : '';
-  const devNote = (code) => code ? '<div class="note"><b>PROBNI KOD</b> (samo probno okruženje — u pravom sistemu stiže SMS-om): <b>' + esc(code) + '</b></div>' : '';
+  // Nikad ne tvrditi da je email poslan ako nije (status dolazi sa servera nakon stvarnog pokušaja slanja).
+  const codeNote = (r, okText) => r.code_status === 'sent' || (r.code_status == null && !r.dev_code) ? '<p>' + okText + '</p>' : r.code_status === 'not_configured' ? '<p class="rs-muted">Email servis još nije povezan — poruka nije poslana.</p>' : r.code_status === 'failed' ? '<div class="note bad">Slanje emaila trenutno nije uspjelo. Pokušajte ponovo za minut.</div>' : '';
+  const devNote = (code) => code ? '<div class="note"><b>PROBNI KOD</b> (samo probno okruženje — u pravom sistemu stiže emailom): <b>' + esc(code) + '</b></div>' : '';
   const show = (t) => {
     $$('[data-t]', root).forEach((b) => b.classList.toggle('active', b.dataset.t === t));
     if (t === 'login') {
@@ -486,22 +486,24 @@ function authForms(root) {
       $('[name=password]', f).onkeydown = (e) => e.key === 'Enter' && $('#go', f).click();
     }
     if (t === 'reg') {
-      f.innerHTML = '<div class="row"><div class="field"><label>Ime *</label><input name="first_name" autocomplete="given-name"></div><div class="field"><label>Prezime *</label><input name="last_name" autocomplete="family-name"></div></div><div class="field"><label>Telefon *</label><input name="phone" inputmode="tel" autocomplete="tel"></div><div class="field"><label>Email *</label><input type="email" name="email" autocomplete="email"></div><div class="field"><label>Lozinka * (najmanje 8 znakova)</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="go">Pošalji kod na telefon</button>';
+      f.innerHTML = '<div class="row"><div class="field"><label>Ime *</label><input name="first_name" autocomplete="given-name"></div><div class="field"><label>Prezime *</label><input name="last_name" autocomplete="family-name"></div></div><div class="field"><label>Telefon *</label><input name="phone" inputmode="tel" autocomplete="tel"></div><div class="field"><label>Email *</label><input type="email" name="email" autocomplete="email"></div><div class="field"><label>Lozinka * (najmanje 8 znakova)</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="go">Pošalji kod na email</button>';
       $('#go', f).onclick = async () => {
         try {
-          const r = await api('POST', 'auth/register', { first_name: val(f, 'first_name'), last_name: val(f, 'last_name'), phone: val(f, 'phone'), email: val(f, 'email'), password: val(f, 'password') });
-          f.innerHTML = smsNote(r, 'Kod je poslan SMS-om na ' + esc(r.phone) + '.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric" autocomplete="one-time-code"></div><div id="e"></div><button class="btn primary" id="ok">Potvrdi telefon</button>';
-          $('#ok', f).onclick = async () => { try { await api('POST', 'auth/confirm', { phone: r.phone, code: val(f, 'code') }); go(); } catch (e) { errBox($('#e', f), e); } };
+          const email = val(f, 'email');
+          const r = await api('POST', 'auth/register', { first_name: val(f, 'first_name'), last_name: val(f, 'last_name'), phone: val(f, 'phone'), email, password: val(f, 'password') });
+          f.innerHTML = codeNote(r, 'Kod je poslan na email ' + esc(email) + '.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric" autocomplete="one-time-code"></div><div id="e"></div><button class="btn primary" id="ok">Potvrdi email</button>';
+          $('#ok', f).onclick = async () => { try { await api('POST', 'auth/confirm', { email, code: val(f, 'code') }); go(); } catch (e) { errBox($('#e', f), e); } };
         } catch (e) { errBox($('#e', f), e); }
       };
     }
     if (t === 'reset') {
-      f.innerHTML = '<div class="field"><label>Potvrđeni broj telefona</label><input name="phone" inputmode="tel"></div><div id="e"></div><button class="btn primary" id="go">Pošalji kod</button>';
+      f.innerHTML = '<div class="field"><label>Broj telefona (kao za prijavu)</label><input name="phone" inputmode="tel"></div><p class="rs-small rs-muted">Kod šaljemo na email koji ste unijeli pri registraciji.</p><div id="e"></div><button class="btn primary" id="go">Pošalji kod</button>';
       $('#go', f).onclick = async () => {
         try {
-          const r = await api('POST', 'auth/reset', { phone: val(f, 'phone') });
-          f.innerHTML = smsNote(r, 'Ako je broj registrovan, kod je poslan SMS-om.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
-          $('#ok', f).onclick = async () => { try { await api('POST', 'auth/reset-confirm', { phone: r.phone, code: val(f, 'code'), password: val(f, 'password') }); go(); } catch (e) { errBox($('#e', f), e); } };
+          const phone = val(f, 'phone');
+          const r = await api('POST', 'auth/reset', { phone });
+          f.innerHTML = codeNote(r, 'Ako je broj registrovan i email potvrđen, kod je poslan na email.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
+          $('#ok', f).onclick = async () => { try { await api('POST', 'auth/reset-confirm', { phone, code: val(f, 'code'), password: val(f, 'password') }); go(); } catch (e) { errBox($('#e', f), e); } };
         } catch (e) { errBox($('#e', f), e); }
       };
     }

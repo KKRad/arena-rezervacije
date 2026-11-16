@@ -776,7 +776,24 @@ async function userCard(id) {
 // ============================================================ start
 // labele polja → pristupačna imena (čitači ekrana)
 let fid = 0;
-new MutationObserver(() => $$('.field').forEach((f) => { const l = $(':scope > label', f), i = $(':scope > input, :scope > select, :scope > textarea', f); if (l && i && !i.id) { i.id = 'f' + ++fid; l.htmlFor = i.id; } })).observe(document.body, { childList: true, subtree: true });
+// Dugme "prikaži lozinku" na svakom polju za lozinku — pomaže i kad dodatak u pregledniku (menadžer lozinki)
+// ometa kucanje u type="password" polja (kursor se pojavi, ali slova se ne upisuju); type="text" to zaobilazi.
+function addPasswordToggle(input) {
+  if (input.dataset.pwToggled) return; input.dataset.pwToggled = '1';
+  input.style.paddingRight = '34px';
+  const wrap = document.createElement('span'); wrap.style.cssText = 'position:relative;display:block';
+  input.parentNode.insertBefore(wrap, input); wrap.appendChild(input);
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pw-eye'; btn.textContent = '👁';
+  btn.title = 'Prikaži/sakrij lozinku'; btn.tabIndex = -1;
+  btn.style.cssText = 'position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:none;cursor:pointer;font-size:16px;line-height:1;padding:4px;opacity:.6';
+  btn.onclick = () => { input.type = input.type === 'password' ? 'text' : 'password'; btn.style.opacity = input.type === 'password' ? '.6' : '1'; input.focus(); };
+  wrap.appendChild(btn);
+}
+new MutationObserver(() => {
+  $$('.field').forEach((f) => { const l = $(':scope > label', f), i = f.querySelector('input, select, textarea'); if (l && i && !i.id) { i.id = 'f' + ++fid; l.htmlFor = i.id; } });
+  $$('input[type=password]').forEach(addPasswordToggle);
+}).observe(document.body, { childList: true, subtree: true });
+$$('input[type=password]').forEach(addPasswordToggle);
 const setTop = () => document.documentElement.style.setProperty('--top-h', $('.rs-top').offsetHeight + 'px');
 addEventListener('resize', setTop);
 

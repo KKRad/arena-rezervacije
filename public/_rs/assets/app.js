@@ -142,7 +142,7 @@ function renderCalendar(el, data, opts) {
 function onTrainingLane(mode, b, laneId, lc) {
   if (lc.claimed) {
     if (lc.mine || mode === 'staff') {
-      ask((lc.mine ? 'Osloboditi svoju stazu' : 'Osloboditi stazu koju je preuzeo(la) ' + (lc.name || 'član kluba')) + ' (staza ' + laneId + ', ' + hm(b.start_at) + '–' + hm(b.end_at) + ')?', 'Osloboди').then(async (yes) => {
+      ask((lc.mine ? 'Osloboditi svoju stazu' : 'Osloboditi stazu koju je preuzeo(la) ' + (lc.name || 'član kluba')) + ' (staza ' + laneId + ', ' + hm(b.start_at) + '–' + hm(b.end_at) + ')?', 'Oslobodi').then(async (yes) => {
         if (!yes) return;
         try { await api('POST', 'reservations/' + b.id + '/release-lane', { lane_id: laneId }); S.reloadCal && S.reloadCal(); } catch (e) { toast(e.message); }
       });

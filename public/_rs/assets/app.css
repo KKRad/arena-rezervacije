@@ -125,6 +125,3 @@ table.t td.num, table.t th.num { text-align: right; white-space: nowrap; }
 .list-plain li { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .big-q { font-size: 17px; font-weight: 700; margin: 8px 0; }
 .rs-proba { background: #ffde59; color: #3a2a00; text-align: center; font-size: 13px; font-weight: 600; padding: 4px 12px; }
-.kb-row { display: flex; gap: 4px; justify-content: center; margin-bottom: 4px; flex-wrap: wrap; }
-.kb-k { min-width: 30px; height: 38px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 15px; cursor: pointer; }
-.kb-k:active { background: var(--paper-2); }

@@ -192,7 +192,9 @@ final class Auth
         $identifier = trim($identifier);
         $phone = Phone::normalize($identifier);
         $key = $phone ?? mb_strtolower($identifier);
-        if (!RateLimit::hit("login:$key", 5, 900) || ($ip !== '' && !RateLimit::hit("loginip:$ip", 30, 900))) {
+        // Ograničenje pokušaja prijave (tražena sigurnosna mjera) važi u produkciji i u automatskim testovima;
+        // na probi/razvojnom okruženju (env 'dev') je isključeno, da ponovljeni ručni pokušaji pri testiranju ne zaključaju nalog.
+        if (Config::get('env') !== 'dev' && (!RateLimit::hit("login:$key", 5, 900) || ($ip !== '' && !RateLimit::hit("loginip:$ip", 30, 900)))) {
             throw new AppError('Previše pokušaja prijave. Pokušajte ponovo za 15 minuta.', 429);
         }
         $u = null;

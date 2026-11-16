@@ -481,12 +481,12 @@ function authForms(root) {
   const show = (t) => {
     $$('[data-t]', root).forEach((b) => b.classList.toggle('active', b.dataset.t === t));
     if (t === 'login') {
-      f.innerHTML = '<div class="field"><label>Broj telefona</label><input name="login" inputmode="tel" autocomplete="username"></div><div class="field"><label>Lozinka</label><input type="password" name="password" autocomplete="current-password"></div><div id="e"></div><button class="btn primary" id="go">Prijava</button>';
+      f.innerHTML = '<div class="field"><label>Broj telefona</label><input name="login" inputmode="tel" autocomplete="username"></div><div class="field"><label>Lozinka</label><input type="text" data-pwfield name="password" autocomplete="current-password" spellcheck="false" autocapitalize="off"></div><div id="e"></div><button class="btn primary" id="go">Prijava</button>';
       $('#go', f).onclick = async () => { try { await api('POST', 'auth/login', { login: val(f, 'login'), password: val(f, 'password') }); go(); } catch (e) { errBox($('#e', f), e); } };
       $('[name=password]', f).onkeydown = (e) => e.key === 'Enter' && $('#go', f).click();
     }
     if (t === 'reg') {
-      f.innerHTML = '<div class="row"><div class="field"><label>Ime *</label><input name="first_name" autocomplete="given-name"></div><div class="field"><label>Prezime *</label><input name="last_name" autocomplete="family-name"></div></div><div class="field"><label>Telefon *</label><input name="phone" inputmode="tel" autocomplete="tel"></div><div class="field"><label>Email *</label><input type="email" name="email" autocomplete="email"></div><div class="field"><label>Lozinka * (najmanje 8 znakova)</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="go">Pošalji kod na email</button>';
+      f.innerHTML = '<div class="row"><div class="field"><label>Ime *</label><input name="first_name" autocomplete="given-name"></div><div class="field"><label>Prezime *</label><input name="last_name" autocomplete="family-name"></div></div><div class="field"><label>Telefon *</label><input name="phone" inputmode="tel" autocomplete="tel"></div><div class="field"><label>Email *</label><input type="email" name="email" autocomplete="email"></div><div class="field"><label>Lozinka * (najmanje 8 znakova)</label><input type="text" data-pwfield name="password" autocomplete="new-password" spellcheck="false" autocapitalize="off"></div><div id="e"></div><button class="btn primary" id="go">Pošalji kod na email</button>';
       $('#go', f).onclick = async () => {
         try {
           const email = val(f, 'email');
@@ -502,7 +502,7 @@ function authForms(root) {
         try {
           const phone = val(f, 'phone');
           const r = await api('POST', 'auth/reset', { phone });
-          f.innerHTML = codeNote(r, 'Ako je broj registrovan i email potvrđen, kod je poslan na email.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="password" name="password" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
+          f.innerHTML = codeNote(r, 'Ako je broj registrovan i email potvrđen, kod je poslan na email.') + devNote(r.dev_code) + '<div class="field"><label>Kod</label><input name="code" inputmode="numeric"></div><div class="field"><label>Nova lozinka</label><input type="text" data-pwfield name="password" autocomplete="new-password" spellcheck="false" autocapitalize="off"></div><div id="e"></div><button class="btn primary" id="ok">Postavi lozinku</button>';
           $('#ok', f).onclick = async () => { try { await api('POST', 'auth/reset-confirm', { phone, code: val(f, 'code'), password: val(f, 'password') }); go(); } catch (e) { errBox($('#e', f), e); } };
         } catch (e) { errBox($('#e', f), e); }
       };
@@ -698,9 +698,9 @@ const ADMIN = {
     const [list, P] = await Promise.all([api('GET', 'staff-accounts'), api('GET', 'perms')]);
     v.innerHTML = '<h2>Nalozi osoblja i ovlaštenja</h2><p class="rs-small rs-muted">Historija bilježi nalog koji je radnju napravio. Zajednički nalog „Šank Arena“ se u historiji vodi pod tim imenom.</p>' + list.map((u) => '<div class="card"><b>' + esc(u.first_name + ' ' + u.last_name) + '</b> · ' + esc(u.username || '') + ' · ' + ({ owner: 'vlasnik', manager: 'menadžer', staff: 'osoblje' }[u.role]) +
       (u.role === 'owner' ? '<p class="rs-small rs-muted">Vlasnik ima sva ovlaštenja.</p>' : '<div class="grid2" style="margin-top:8px">' + Object.entries(P.all).map(([k, l]) => '<label class="rs-small"><input type="checkbox" data-u="' + u.id + '" value="' + k + '"' + (u.perms.includes(k) ? ' checked' : '') + '> ' + esc(l) + '</label>').join('') + '</div><div class="btns" style="margin-top:8px"><button class="btn sm primary" data-save="' + u.id + '">Sačuvaj ovlaštenja</button><button class="btn sm" data-pw="' + u.id + '">Nova lozinka</button></div>') + '</div>').join('') +
-      '<div class="card"><h3>Novi nalog osoblja</h3><div class="row"><div class="field"><label>Ime (npr. Šank Arena)</label><input name="first_name"></div><div class="field"><label>Prezime</label><input name="last_name"></div><div class="field"><label>Korisničko ime</label><input name="username" placeholder="sank"></div><div class="field"><label>Uloga</label><select name="role"><option value="staff">Osoblje (šank)</option><option value="manager">Menadžer</option></select></div><div class="field"><label>Lozinka (min. 8)</label><input type="password" name="password" autocomplete="new-password"></div></div><div id="e"></div><button class="btn primary" id="add">Napravi nalog</button></div>';
+      '<div class="card"><h3>Novi nalog osoblja</h3><div class="row"><div class="field"><label>Ime (npr. Šank Arena)</label><input name="first_name"></div><div class="field"><label>Prezime</label><input name="last_name"></div><div class="field"><label>Korisničko ime</label><input name="username" placeholder="sank"></div><div class="field"><label>Uloga</label><select name="role"><option value="staff">Osoblje (šank)</option><option value="manager">Menadžer</option></select></div><div class="field"><label>Lozinka (min. 8)</label><input type="text" data-pwfield name="password" autocomplete="new-password" spellcheck="false" autocapitalize="off"></div></div><div id="e"></div><button class="btn primary" id="add">Napravi nalog</button></div>';
     $$('[data-save]', v).forEach((b) => (b.onclick = async () => { const id = b.dataset.save; try { await api('POST', 'perms/' + id, { perms: $$('input[data-u="' + id + '"]:checked', v).map((c) => c.value) }); toast('Ovlaštenja sačuvana'); } catch (e) { toast(e.message); } }));
-    $$('[data-pw]', v).forEach((b) => (b.onclick = () => { const u = list.find((x) => +x.id === +b.dataset.pw); modal('<h3>Nova lozinka — ' + esc(u.first_name) + '</h3><div class="field"><label>Lozinka</label><input type="password" name="p" autocomplete="new-password"></div><div id="e"></div><button class="btn primary" id="ok">Sačuvaj</button>', (box, close) => { $('#ok', box).onclick = async () => { try { await api('POST', 'staff-accounts', { id: u.id, first_name: u.first_name, last_name: u.last_name, username: u.username, role: u.role, password: val(box, 'p') }); close(); toast('Lozinka promijenjena'); } catch (e) { errBox($('#e', box), e); } }; }); }));
+    $$('[data-pw]', v).forEach((b) => (b.onclick = () => { const u = list.find((x) => +x.id === +b.dataset.pw); modal('<h3>Nova lozinka — ' + esc(u.first_name) + '</h3><div class="field"><label>Lozinka</label><input type="text" data-pwfield name="p" autocomplete="new-password" spellcheck="false" autocapitalize="off"></div><div id="e"></div><button class="btn primary" id="ok">Sačuvaj</button>', (box, close) => { $('#ok', box).onclick = async () => { try { await api('POST', 'staff-accounts', { id: u.id, first_name: u.first_name, last_name: u.last_name, username: u.username, role: u.role, password: val(box, 'p') }); close(); toast('Lozinka promijenjena'); } catch (e) { errBox($('#e', box), e); } }; }); }));
     $('#add', v).onclick = async () => { try { await api('POST', 'staff-accounts', { first_name: val(v, 'first_name'), last_name: val(v, 'last_name'), username: val(v, 'username'), role: val(v, 'role'), password: val(v, 'password') }); ADMIN.ovlastenja(v); } catch (e) { errBox($('#e', v), e); } };
   },
 
@@ -778,22 +778,25 @@ async function userCard(id) {
 let fid = 0;
 // Dugme "prikaži lozinku" na svakom polju za lozinku — pomaže i kad dodatak u pregledniku (menadžer lozinki)
 // ometa kucanje u type="password" polja (kursor se pojavi, ali slova se ne upisuju); type="text" to zaobilazi.
+// Polja za lozinku su OBIČNA tekstualna polja (ne type="password"), da ih preglednik/dodaci za lozinke
+// ne prepoznaju kao lozinku i ne ometaju kucanje (poznat problem kod nekih korisnika). Dugme sa okom
+// omogućava da se, ako korisnik želi, tekst ipak sakrije (type="password") — podrazumijevano je vidljiv.
 function addPasswordToggle(input) {
   if (input.dataset.pwToggled) return; input.dataset.pwToggled = '1';
   input.style.paddingRight = '34px';
   const wrap = document.createElement('span'); wrap.style.cssText = 'position:relative;display:block';
   input.parentNode.insertBefore(wrap, input); wrap.appendChild(input);
-  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pw-eye'; btn.textContent = '👁';
-  btn.title = 'Prikaži/sakrij lozinku'; btn.tabIndex = -1;
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pw-eye'; btn.textContent = '🙈';
+  btn.title = 'Sakrij/prikaži tekst'; btn.tabIndex = -1;
   btn.style.cssText = 'position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:none;cursor:pointer;font-size:16px;line-height:1;padding:4px;opacity:.6';
-  btn.onclick = () => { input.type = input.type === 'password' ? 'text' : 'password'; btn.style.opacity = input.type === 'password' ? '.6' : '1'; input.focus(); };
+  btn.onclick = () => { input.type = input.type === 'password' ? 'text' : 'password'; btn.textContent = input.type === 'password' ? '👁' : '🙈'; input.focus(); };
   wrap.appendChild(btn);
 }
 new MutationObserver(() => {
   $$('.field').forEach((f) => { const l = $(':scope > label', f), i = f.querySelector('input, select, textarea'); if (l && i && !i.id) { i.id = 'f' + ++fid; l.htmlFor = i.id; } });
-  $$('input[type=password]').forEach(addPasswordToggle);
+  $$('[data-pwfield]').forEach(addPasswordToggle);
 }).observe(document.body, { childList: true, subtree: true });
-$$('input[type=password]').forEach(addPasswordToggle);
+$$('[data-pwfield]').forEach(addPasswordToggle);
 const setTop = () => document.documentElement.style.setProperty('--top-h', $('.rs-top').offsetHeight + 'px');
 addEventListener('resize', setTop);
 

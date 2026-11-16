@@ -70,6 +70,7 @@ final class Api
             case 'POST reservations/:id/cancel': Reservations::cancel($this->me(), $id, ($in['kind'] ?? '') === 'arena' ? 'arena' : 'guest', str_opt($in, 'reason')); return Reservations::detail($this->me(), $id);
             case 'POST reservations/:id/arrived': Reservations::markArrived($this->me(), $id); return Reservations::detail($this->me(), $id);
             case 'POST reservations/:id/no-show': $r = Reservations::markNoShow($this->me(), $id, !empty($in['release'])); return Reservations::detail($this->me(), $id) + ['result' => $r['no_show_result']];
+            case 'POST reservations/:id/reopen': Reservations::reopen($this->me(), $id, (string) ($in['reason'] ?? '')); return Reservations::detail($this->me(), $id);
             case 'GET reservations/:id/settle-quote': $this->staff('cash.collect'); return Reservations::quoteSettle($id, isset($q['used']) && $q['used'] !== '' ? (int) $q['used'] : null);
             case 'POST reservations/:id/settle': $rc = Reservations::settle($this->me(), $id, $in); return ['receipt' => $rc, 'reservation' => Reservations::detail($this->me(), $id)];
             case 'GET reservations/:id/history': $this->staff('res.read'); return Db::all("SELECT at_utc, actor_label, action, data_json, reason FROM audit_log WHERE entity = 'reservation' AND entity_id = ? ORDER BY id", [(string) $id]);

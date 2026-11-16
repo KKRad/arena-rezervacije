@@ -272,6 +272,43 @@ final class Reservations
         return self::get($id) + ['no_show_result' => $result];
     }
 
+    /**
+     * Ispravka: poništava pogrešno evidentiran dolazak/naplatu/nedolazak i vraća termin na "čeka",
+     * da ga osoblje može ponovo ispravno obraditi. Samo vlasnik i menadžer (cash.correct).
+     * Uplate se STORNIRAJU (ne brišu), dug nastao greškom se oprašta, a redovni sati mjesečne koji su
+     * propali zbog pogrešno označenog nedolaska vraćaju se na raspolaganje. Bonus sati koji su u
+     * međuvremenu POTROŠENI (ne samo planirani) ovim se ne vraćaju automatski — za to služi ručna
+     * dodjela bonus sati (sa svojim razlogom i tragom), da ne bi došlo do neprimijećenog dupliranja.
+     */
+    public static function reopen(array $actor, int $id, string $reason): array
+    {
+        Perms::require($actor, 'cash.correct');
+        if (trim($reason) === '') throw new AppError('Unesite razlog ispravke.');
+        Db::tx(function () use ($actor, $id, $reason) {
+            $today = DayClose::paymentDay();
+            $r = self::lockRow($id);
+            if ($r['status'] !== 'active') throw new AppError('Otkazana rezervacija se ne ispravlja ovako.');
+            if ($r['attendance'] === 'pending' && !$r['processed_utc']) throw new AppError('Termin čeka obradu — nema šta da se poništi.');
+            Db::lockDay(T::day($r['start_at']));
+            $reversed = 0;
+            foreach (Db::all('SELECT * FROM payments WHERE reservation_id = ? AND reverses_payment_id IS NULL', [$id]) as $p) {
+                if (Db::val('SELECT id FROM payments WHERE reverses_payment_id = ?', [$p['id']])) continue;
+                Db::insert('payments', ['business_day' => $today, 'user_id' => $p['user_id'], 'reservation_id' => $id, 'debt_id' => $p['debt_id'], 'pass_id' => $p['pass_id'],
+                    'kind' => $p['kind'], 'category' => $p['category'], 'amount_cents' => -(int) $p['amount_cents'], 'reverses_payment_id' => $p['id'],
+                    'reason' => 'Poništeno pri ispravci termina: ' . $reason, 'created_by' => $actor['id'], 'created_utc' => Clock::nowUtc()]);
+                $reversed += (int) $p['amount_cents'];
+            }
+            $debt = Db::one("SELECT * FROM debts WHERE reservation_id = ? AND status = 'open'", [$id]);
+            if ($debt) Db::update('debts', ['status' => 'forgiven', 'closed_by' => $actor['id'], 'closed_utc' => Clock::nowUtc(), 'close_reason' => 'Poništeno pri ispravci termina: ' . $reason], 'id = ?', [$debt['id']]);
+            Db::q("DELETE FROM hour_allocations WHERE reservation_id = ? AND source = 'regular' AND state IN ('forfeited','used')", [$id]);
+            Db::q('DELETE FROM charges WHERE reservation_id = ?', [$id]);
+            Db::update('reservations', ['attendance' => 'pending', 'attendance_utc' => null, 'attendance_by' => null, 'released_at' => null, 'used_minutes' => null, 'processed_utc' => null, 'processed_by' => null, 'updated_utc' => Clock::nowUtc()], 'id = ?', [$id]);
+            if ($r['user_id']) Coverage::replanUser((int) $r['user_id']);
+            Audit::log('reservation.reopened', 'reservation', $id, ['reversed_cents' => $reversed, 'debt_forgiven' => $debt ? (int) $debt['id'] : null], $reason);
+        });
+        return self::get($id);
+    }
+
     /** Prijedlog naplate (bez upisa). */
     public static function quoteSettle(int $id, ?int $usedMinutes = null): array
     {
@@ -398,6 +435,7 @@ final class Reservations
         if ($open && (Perms::has($actor, 'res.write') || $mine) && $r['end_at'] > $now) $a[] = 'extend';
         if ($open && $r['attendance'] === 'pending' && (Perms::has($actor, 'res.write') || ($mine && $r['start_at'] > $now))) $a[] = 'cancel';
         if ($open && $r['attendance'] === 'pending' && Perms::has($actor, 'res.write')) $a[] = 'cancel_arena';
+        if ($active && $personal && !$open && Perms::has($actor, 'cash.correct')) $a[] = 'reopen';
         $out['actions'] = $a;
         return $out;
     }

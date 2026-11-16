@@ -319,6 +319,61 @@ test('Ispravka naplate (storno) — historija se ne briše', function () {
     eq((int) Db::val("SELECT COUNT(*) FROM outbox WHERE type = 'payment_corrected'"), 0, 'bez primalaca nema poruke');
 });
 
+test('Poništavanje pogrešno evidentiranog dolaska/naplate (vlasnik/menadžer)', function () {
+    $s = mkuser('Sank', '060000000', 'staff'); $mgr = mkuser('Menadzer', '060000001', 'manager'); $o = mkuser('Vlasnik', '060000009', 'owner');
+    $g = mkuser('Goran', '063000001');
+    // 1) poništavanje pogrešne naplate rekreacije
+    $r = book($g, '2026-11-16 18:00', 60, 1);
+    Clock::set('2026-11-16 18:30:00');
+    as_($s); $rc = Reservations::settle($s, $r['id'], ['shoes_used' => true, 'shoe_pairs' => 2]);
+    eq($rc['total_cents'], 2100, 'naplaćeno 21 KM');
+    $det = Reservations::detail($s, $r['id']);
+    ok(!in_array('reopen', $det['actions'], true), 'šank ne vidi dugme za poništavanje');
+    throws(fn() => Reservations::reopen($s, $r['id'], 'test'), 'šank ne može poništiti', 'ovlaštenje');
+    as_($mgr);
+    $det2 = Reservations::detail($mgr, $r['id']);
+    ok(in_array('reopen', $det2['actions'], true), 'menadžer vidi dugme za poništavanje');
+    throws(fn() => Reservations::reopen($mgr, $r['id'], ''), 'razlog je obavezan', 'razlog');
+    Reservations::reopen($mgr, $r['id'], 'Označeno na pogrešnom terminu');
+    $after = Reservations::get($r['id']);
+    eq([$after['attendance'], $after['processed_utc']], ['pending', null], 'termin vraćen na čekanje');
+    eq((int) Db::val('SELECT COUNT(*) FROM charges WHERE reservation_id = ?', [$r['id']]), 0, 'stavke naplate obrisane (naplatiće se ponovo)');
+    eq((int) Db::val("SELECT COALESCE(SUM(amount_cents),0) FROM payments WHERE reservation_id = ?", [$r['id']]), 0, 'gotovina netto nula nakon storna (original + storno)');
+    eq((int) Db::val('SELECT COUNT(*) FROM payments WHERE reservation_id = ?', [$r['id']]), 4, 'originalne uplate ostaju u historiji + storno stavke');
+    as_($s);
+    $det3 = Reservations::detail($s, $r['id']);
+    ok(in_array('settle', $det3['actions'], true), 'nakon poništavanja šank ponovo može naplatiti');
+    $rc2 = Reservations::settle($s, $r['id'], ['shoes_used' => false]);
+    eq($rc2['total_cents'], 1500, 'ispravna naplata nakon poništavanja');
+    throws(fn() => Reservations::reopen($o, 999999, 'x'), 'nepostojeća rezervacija', 'ne postoji');
+
+    // 2) poništavanje pogrešno označenog nedolaska — dug se oprašta, sati mjesečne se vraćaju
+    $m = mkuser('Mjesecna', '062000001');
+    as_($s); Coverage::activate((int) $m['id'], 'standard', null, $s);
+    $r2 = book($m, '2026-11-17 18:00', 60, 1);
+    Clock::set('2026-11-17 18:15:00');
+    as_($s); Reservations::markNoShow($s, $r2['id'], true);
+    eq(Coverage::regularUsed((int) Coverage::currentPass((int) $m['id'])['id'], '2026-11-16'), 60, 'sat propao nakon (pogrešnog) nedolaska');
+    as_($mgr); Reservations::reopen($mgr, $r2['id'], 'Pogrešna oznaka — gost je zapravo došao');
+    eq(Coverage::regularUsed((int) Coverage::currentPass((int) $m['id'])['id'], '2026-11-16'), 60, 'redovni sat ostaje planiran za termin nakon poništavanja (slot još nije završen)');
+    eq(Reservations::get($r2['id'])['attendance'], 'pending', 'mjesečna rezervacija vraćena na čekanje');
+
+    $g2 = mkuser('Gost2', '063000002');
+    Clock::set('2026-11-16 09:00:00');
+    $r3 = book($g2, '2026-11-16 20:00', 60, 1);
+    Clock::set('2026-11-16 20:15:00');
+    as_($s); Reservations::markNoShow($s, $r3['id'], false); // prvi nedolazak = upozorenje, bez duga
+    Clock::set('2026-11-16 20:30:00');
+    $r4 = book($g2, '2026-11-16 21:00', 60, 1);
+    Clock::set('2026-11-16 21:15:00');
+    as_($s); $nr = Reservations::markNoShow($s, $r4['id'], false);
+    $debtId = $nr['no_show_result']['debt']['id'];
+    eq(Db::val('SELECT status FROM debts WHERE id = ?', [$debtId]), 'open', 'drugi nedolazak napravio dug');
+    as_($mgr); Reservations::reopen($mgr, $r4['id'], 'Pogrešan gost označen');
+    eq(Db::val('SELECT status FROM debts WHERE id = ?', [$debtId]), 'forgiven', 'dug nastao greškom automatski oprošten pri poništavanju');
+    ok((bool) Db::val("SELECT id FROM audit_log WHERE action = 'reservation.reopened' AND entity_id = ?", [(string) $r4['id']]), 'poništavanje zabilježeno u historiji');
+});
+
 test('Klubovi: trening na račun kluba, utakmica, obračun', function () {
     $o = mkuser('Vlasnik', '060000009', 'owner');
     $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");

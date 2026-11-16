@@ -11,10 +11,18 @@ final class Calendar
         $from = $date . ' 00:00:00'; $to = T::addDays($date, 1) . ' 00:00:00';
         $blocks = [];
         $staff = $mode === 'staff';
+        $now = Clock::nowLocal();
         $rows = Db::all("SELECT r.*, c.short club_short, c.name club_name, u.first_name, u.last_name FROM reservations r LEFT JOIN clubs c ON c.id = r.club_id LEFT JOIN users u ON u.id = r.user_id
             WHERE r.start_at >= ? AND r.start_at < ? AND (r.status = 'active'" . ($staff ? " OR r.status = 'cancelled'" : '') . ') ORDER BY r.start_at', [$from, $to]);
-        $lanesBy = [];
-        if ($rows) foreach (Db::all('SELECT reservation_id, lane_id FROM reservation_lanes WHERE reservation_id IN (' . implode(',', array_map(fn($r) => (int) $r['id'], $rows)) . ') ORDER BY lane_id') as $l) $lanesBy[$l['reservation_id']][] = (int) $l['lane_id'];
+        $lanesBy = []; $claimBy = [];
+        if ($rows) foreach (Db::all('SELECT reservation_id, lane_id, claimed_by_user_id FROM reservation_lanes WHERE reservation_id IN (' . implode(',', array_map(fn($r) => (int) $r['id'], $rows)) . ') ORDER BY lane_id') as $l) {
+            $lanesBy[$l['reservation_id']][] = (int) $l['lane_id'];
+            if ($l['claimed_by_user_id']) $claimBy[$l['reservation_id']][(int) $l['lane_id']] = (int) $l['claimed_by_user_id'];
+        }
+        $claimNames = [];
+        $claimerIds = [];
+        foreach ($claimBy as $byLane) foreach ($byLane as $uid) $claimerIds[$uid] = true;
+        if ($claimerIds) foreach (Db::all('SELECT id, first_name, last_name FROM users WHERE id IN (' . implode(',', array_map('intval', array_keys($claimerIds))) . ')') as $u) $claimNames[(int) $u['id']] = trim($u['first_name'] . ' ' . $u['last_name']);
         foreach ($rows as $r) {
             $cat = $r['category'];
             $mine = $viewer && (int) $r['user_id'] === (int) $viewer['id'];
@@ -22,7 +30,17 @@ final class Calendar
                 'end_at' => $r['released_at'] && !$staff ? $r['released_at'] : $r['end_at'], 'lanes' => $lanesBy[$r['id']] ?? [], 'label' => Cat::label($cat), 'short' => self::short($cat), 'mine' => $mine];
             if ($r['released_at'] && !$staff && $r['released_at'] <= $r['start_at']) continue;
             if (Cat::isMatch($cat)) { $b['label'] = $r['match_home'] . ' – ' . $r['match_guest']; $b['sub'] = $r['match_league']; $b['short'] = 'UT'; }
-            elseif ($cat === 'training' && $r['club_short']) { $b['label'] = 'Trening ' . $r['club_short']; }
+            elseif ($cat === 'training' && $r['club_short']) {
+                $b['label'] = 'Trening ' . $r['club_short'];
+                $b['club_id'] = (int) $r['club_id'];
+                $canClaim = $viewer && !empty($viewer['club_id']) && (int) $viewer['club_id'] === (int) $r['club_id'] && $r['status'] === 'active' && $r['end_at'] > $now;
+                $b['lane_claims'] = array_map(function ($laneId) use ($claimBy, $r, $viewer, $claimNames, $staff) {
+                    $uid = $claimBy[$r['id']][$laneId] ?? null;
+                    $own = $uid && $viewer && (int) $uid === (int) $viewer['id'];
+                    return ['lane_id' => $laneId, 'claimed' => $uid !== null, 'mine' => $own, 'name' => ($staff || $own) ? ($claimNames[$uid] ?? null) : null];
+                }, $b['lanes']);
+                $b['claimable'] = $canClaim;
+            }
             if ($staff || $mine) {
                 $b['who'] = trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? ''));
                 $b['state'] = self::state($r);

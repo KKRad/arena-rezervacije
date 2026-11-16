@@ -309,6 +309,47 @@ final class Reservations
         return self::get($id);
     }
 
+    /**
+     * Član kluba (ili osoblje u njegovo ime) preuzima slobodnu stazu u terminu treninga svog kluba.
+     * Staza koju niko ne preuzme i dalje je trening (klub se naplaćuje za cijeli termin bez obzira na
+     * popunjenost) — preuzimanje samo evidentira ko je na toj stazi igrao, bez posebne naplate igrača.
+     */
+    public static function claimTrainingLane(array $actor, int $id, int $laneId, ?int $forUserId = null): array
+    {
+        $staff = Perms::has($actor, 'res.write');
+        if ($forUserId !== null && !$staff) throw new AppError('Nemate ovlaštenje da prijavite drugog igrača.', 403);
+        Db::tx(function () use ($actor, $id, $laneId, $forUserId, $staff) {
+            $r = self::lockRow($id);
+            if ($r['status'] !== 'active') throw new AppError('Rezervacija je otkazana.');
+            if ($r['category'] !== 'training') throw new AppError('Ova staza nije u terminu treninga.');
+            if (!in_array($laneId, $r['lanes'], true)) throw new AppError('Staza nije u ovom terminu.');
+            if ($r['end_at'] <= Clock::nowLocal()) throw new AppError('Termin je već završen.');
+            $targetId = $forUserId ?? (int) $actor['id'];
+            $target = Auth::userById($targetId);
+            if (!$target || (int) $target['club_id'] !== (int) $r['club_id']) throw new AppError('Igrač nije član ovog kluba.');
+            $n = Db::q('UPDATE reservation_lanes SET claimed_by_user_id = ?, claimed_utc = ? WHERE reservation_id = ? AND lane_id = ? AND claimed_by_user_id IS NULL', [$targetId, Clock::nowUtc(), $id, $laneId])->rowCount();
+            if (!$n) throw new AppError('Staza je već zauzeta.');
+            Audit::log('training_lane.claimed', 'reservation', $id, ['lane_id' => $laneId, 'user_id' => $targetId]);
+        });
+        return self::get($id);
+    }
+
+    /** Oslobađa prijavljenu stazu u terminu treninga (sam igrač ili osoblje). */
+    public static function releaseTrainingLane(array $actor, int $id, int $laneId): array
+    {
+        $staff = Perms::has($actor, 'res.write');
+        Db::tx(function () use ($actor, $id, $laneId, $staff) {
+            $r = self::lockRow($id);
+            if ($r['category'] !== 'training') throw new AppError('Ova staza nije u terminu treninga.');
+            $claimed = Db::val('SELECT claimed_by_user_id FROM reservation_lanes WHERE reservation_id = ? AND lane_id = ?', [$id, $laneId]);
+            if (!$claimed) throw new AppError('Staza nije prijavljena.');
+            if (!$staff && (int) $claimed !== (int) $actor['id']) throw new AppError('Nemate ovlaštenje.', 403);
+            Db::q('UPDATE reservation_lanes SET claimed_by_user_id = NULL, claimed_utc = NULL WHERE reservation_id = ? AND lane_id = ?', [$id, $laneId]);
+            Audit::log('training_lane.released', 'reservation', $id, ['lane_id' => $laneId, 'user_id' => (int) $claimed]);
+        });
+        return self::get($id);
+    }
+
     /** Prijedlog naplate (bez upisa). */
     public static function quoteSettle(int $id, ?int $usedMinutes = null): array
     {

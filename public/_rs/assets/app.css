@@ -92,6 +92,8 @@ table.t td.num, table.t th.num { text-align: right; white-space: nowrap; }
 .blk.st-no_show { opacity: .55; }
 .blk .badge { position: absolute; top: 1px; right: 2px; font-size: 10px; background: rgba(0,0,0,.35); border-radius: 4px; padding: 0 3px; }
 .blk.ev { opacity: .92; }
+.blk.trn-open { opacity: .55; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.4) 0 5px, transparent 5px 10px) !important; }
+.blk.trn-claimed { opacity: 1; }
 .pos { position: absolute; left: 2px; right: 2px; z-index: 3; border-radius: 5px; font-size: 10px; line-height: 1.15; padding: 2px 3px; overflow: hidden; background: rgba(255,255,255,.92); color: var(--ink); border: 1px solid rgba(0,0,0,.15); }
 .pos.free { background: rgba(255,255,255,.55); color: var(--muted); font-style: italic; }
 @media (min-width: 760px) { .pos { font-size: 11px; } }

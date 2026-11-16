@@ -98,16 +98,18 @@ function renderCalendar(el, data, opts) {
     for (const lane of b.lanes) {
       const col = cols[lane]; if (!col) continue;
       const top = y(b.start_at), ht = Math.max(R, y(b.end_at) - top) - 1;
+      const lc = b.lane_claims ? b.lane_claims.find((x) => x.lane_id === +lane) : null;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'blk' + (b.type === 'event' ? ' ev' : '') + (b.mine ? ' mine' : '') + (b.state ? ' st-' + b.state : '');
+      btn.className = 'blk' + (b.type === 'event' ? ' ev' : '') + (b.mine || (lc && lc.mine) ? ' mine' : '') + (b.state ? ' st-' + b.state : '') + (lc ? (lc.claimed ? ' trn-claimed' : ' trn-open') : '');
       btn.style.cssText = 'top:' + top + 'px;height:' + ht + 'px;background:' + b.color;
       const narrow = innerWidth < 760;
       const l1 = narrow ? (b.short + ' ' + hm(b.start_at)) : b.label;
-      const l2 = narrow ? (b.who ? b.who.split(' ')[0] : (b.mine ? 'Vaše' : '')) : (hm(b.start_at) + '–' + hm(b.end_at) + (b.who ? ' · ' + b.who : '') + (b.sub ? ' · ' + b.sub : '') + (b.mine ? ' · Vaša rezervacija' : ''));
+      let l2 = narrow ? (b.who ? b.who.split(' ')[0] : (b.mine ? 'Vaše' : '')) : (hm(b.start_at) + '–' + hm(b.end_at) + (b.who ? ' · ' + b.who : '') + (b.sub ? ' · ' + b.sub : '') + (b.mine ? ' · Vaša rezervacija' : ''));
+      if (lc) l2 = lc.claimed ? (lc.name ? lc.name + (lc.mine ? ' (ja)' : '') : 'Zauzeto') : (b.claimable ? 'Slobodno — prijavi se' : 'Trening');
       if (b.positions) btn.innerHTML = ''; else btn.innerHTML = '<span class="l1">' + esc(l1) + '</span>' + (ht > 2 * R ? '<span class="l2">' + esc(l2) + '</span>' : '') + (b.state && staffMode ? '<span class="badge" title="' + STATE[b.state][1] + '">' + STATE[b.state][0] + '</span>' : '');
-      btn.title = b.label + ' ' + hm(b.start_at) + '–' + hm(b.end_at);
-      btn.onclick = (e) => { e.stopPropagation(); opts.onBlock && opts.onBlock(b); };
+      btn.title = b.label + ' ' + hm(b.start_at) + '–' + hm(b.end_at) + (lc ? ' · staza ' + lane : '');
+      btn.onclick = (e) => { e.stopPropagation(); if (lc) { opts.onTrainingLane && opts.onTrainingLane(b, +lane, lc); return; } opts.onBlock && opts.onBlock(b); };
       col.appendChild(btn);
       // nastupi (kvalifikacije: sve pozicije; turnir: upisani igrači)
       const items = b.positions || b.entries || [];
@@ -135,6 +137,41 @@ function renderCalendar(el, data, opts) {
       opts.onFree(+lane, opts.mode === 'staff' && !opts.fullHour ? m : hour);
     };
   }
+}
+
+function onTrainingLane(mode, b, laneId, lc) {
+  if (lc.claimed) {
+    if (lc.mine || mode === 'staff') {
+      ask((lc.mine ? 'Osloboditi svoju stazu' : 'Osloboditi stazu koju je preuzeo(la) ' + (lc.name || 'član kluba')) + ' (staza ' + laneId + ', ' + hm(b.start_at) + '–' + hm(b.end_at) + ')?', 'Osloboди').then(async (yes) => {
+        if (!yes) return;
+        try { await api('POST', 'reservations/' + b.id + '/release-lane', { lane_id: laneId }); S.reloadCal && S.reloadCal(); } catch (e) { toast(e.message); }
+      });
+    } else {
+      toast('Stazu je preuzeo(la) ' + (lc.name || 'član kluba') + '.');
+    }
+    return;
+  }
+  if (mode === 'staff') {
+    modal('<h3>Prijava igrača — staza ' + laneId + '</h3><div class="field"><label>Član kluba — telefon ili ime</label><input name="q" autocomplete="off"></div><div id="found"></div><div id="e"></div>', (box, close) => {
+      let t;
+      $('[name=q]', box).oninput = (e) => { clearTimeout(t); t = setTimeout(async () => {
+        const q = e.target.value.trim(); if (q.length < 3) { $('#found', box).innerHTML = ''; return; }
+        const list = (await api('GET', 'users?q=' + encodeURIComponent(q)).catch(() => [])).filter((u) => +u.club_id === +b.club_id);
+        $('#found', box).innerHTML = list.length ? '<ul class="list-plain">' + list.map((u) => '<li><button type="button" class="btn sm" data-u="' + u.id + '">Prijavi</button> ' + esc(u.first_name + ' ' + u.last_name) + ' · ' + esc(u.phone_pretty) + '</li>').join('') + '</ul>' : '<div class="rs-small rs-muted">Nema člana kluba s tim podacima.</div>';
+        $$('[data-u]', box).forEach((btn) => (btn.onclick = async () => {
+          try { await api('POST', 'reservations/' + b.id + '/claim-lane', { lane_id: laneId, user_id: +btn.dataset.u }); close(); S.reloadCal && S.reloadCal(); }
+          catch (e) { errBox($('#e', box), e); }
+        }));
+      }, 250); };
+    });
+    return;
+  }
+  if (!b.claimable) { toast('Samo članovi kluba mogu preuzeti ovu stazu.'); return; }
+  ask('Prijaviti se na stazu ' + laneId + ' u terminu treninga (' + hm(b.start_at) + '–' + hm(b.end_at) + ')?', 'Prijavi se').then(async (yes) => {
+    if (!yes) return;
+    try { await api('POST', 'reservations/' + b.id + '/claim-lane', { lane_id: laneId }); toast('Prijavljeni ste na stazu ' + laneId + '.'); S.reloadCal && S.reloadCal(); }
+    catch (e) { toast(e.message); }
+  });
 }
 
 function renderWeek(el, data, onDay) {
@@ -186,6 +223,7 @@ async function calendarView(root, mode) {
         mode,
         onBlock: (b) => (b.type === 'event' ? openEvent(b.id) : (mode !== 'staff' && !b.mine ? publicDetail(b) : openReservation(b.id))),
         onFree: (lane, minute) => onFreeSlot(mode, d, lane, minute),
+        onTrainingLane: (b, lane, lc) => onTrainingLane(mode, b, lane, lc),
       });
       $('#cal-legend', root).innerHTML = legend(d.categories);
       const evs = d.blocks.filter((b) => b.type === 'event');

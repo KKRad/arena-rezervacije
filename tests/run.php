@@ -467,6 +467,45 @@ test('Stalni klupski termini: pravilo, izuzeci, bez beskonačnih redova', functi
     throws(fn() => Series::approve($o, (int) $s3['id'], []), 'dva pravila > 6 staza', 'trajno');
 });
 
+test('Prijava člana kluba na slobodnu stazu u terminu treninga', function () {
+    $o = mkuser('Vlasnik', '060000009', 'owner');
+    $rad = (int) Db::val("SELECT id FROM clubs WHERE short = 'Rad'");
+    $olimp = (int) Db::val("SELECT id FROM clubs WHERE short = 'Olimp'");
+    $m1 = mkuser('Igrač1', '064100001', 'guest', $rad);
+    $m2 = mkuser('Igrač2', '064100002', 'guest', $rad);
+    $drugiKlub = mkuser('Drugiklub', '064100003', 'guest', $olimp);
+    $gost = mkuser('Gost', '064100004');
+    as_($o);
+    $s = Series::createByStaff($o, ['club_id' => $rad, 'weekday' => 2, 'start_time' => '19:00', 'minutes' => 60, 'lane_count' => 6]);
+    Series::approve($o, (int) $s['id'], []);
+    $r = Db::one("SELECT * FROM reservations WHERE series_id = ? AND occurrence_date = '2026-11-17'", [$s['id']]);
+    ok($r && (int) $r['id'] > 0, 'trening upisan za utorak 17.11.');
+    $rid = (int) $r['id'];
+    $lanes = array_map('intval', array_column(Db::all('SELECT lane_id FROM reservation_lanes WHERE reservation_id = ? ORDER BY lane_id', [$rid]), 'lane_id'));
+    eq($lanes, [1, 2, 3, 4, 5, 6], 'trening zauzima svih 6 staza');
+
+    as_($drugiKlub); throws(fn() => Reservations::claimTrainingLane($drugiKlub, $rid, $lanes[0]), 'član drugog kluba ne može preuzeti stazu', 'član');
+    as_($m1); Reservations::claimTrainingLane($m1, $rid, $lanes[0]);
+    eq((int) Db::val('SELECT claimed_by_user_id FROM reservation_lanes WHERE reservation_id = ? AND lane_id = ?', [$rid, $lanes[0]]), (int) $m1['id'], 'staza 1 prijavljena na igrača 1');
+    as_($m2); throws(fn() => Reservations::claimTrainingLane($m2, $rid, $lanes[0]), 'staza već zauzeta', 'zauzeta');
+    as_($gost); throws(fn() => Reservations::claimTrainingLane($gost, $rid, $lanes[1], (int) $m2['id']), 'gost (nije osoblje) ne može prijaviti drugog igrača', 'ovlaštenje');
+    as_($o); Reservations::claimTrainingLane($o, $rid, $lanes[1], (int) $m2['id']);
+    eq((int) Db::val('SELECT claimed_by_user_id FROM reservation_lanes WHERE reservation_id = ? AND lane_id = ?', [$rid, $lanes[1]]), (int) $m2['id'], 'osoblje prijavilo igrača 2 na stazu 2');
+
+    $cal = Calendar::day('2026-11-17', 'user', Auth::userById((int) $m1['id']));
+    $block = null; foreach ($cal['blocks'] as $b) if (($b['id'] ?? null) === $rid) $block = $b;
+    ok($block !== null, 'trening prikazan u kalendaru');
+    eq($block['claimable'], true, 'član kluba može preuzimati staze u ovom terminu');
+    $lc1 = null; foreach ($block['lane_claims'] as $lc) if ($lc['lane_id'] === $lanes[0]) $lc1 = $lc;
+    eq([$lc1['claimed'], $lc1['mine']], [true, true], 'staza 1 prikazana kao preuzeta i moja (vlasniku)');
+
+    as_($m1); Reservations::releaseTrainingLane($m1, $rid, $lanes[0]);
+    ok(!Db::val('SELECT claimed_by_user_id FROM reservation_lanes WHERE reservation_id = ? AND lane_id = ?', [$rid, $lanes[0]]), 'igrač sam oslobodio svoju stazu');
+    as_($m1); throws(fn() => Reservations::releaseTrainingLane($m1, $rid, $lanes[1]), 'igrač ne može osloboditi tuđu stazu', 'ovlaštenje');
+    as_($o); Reservations::releaseTrainingLane($o, $rid, $lanes[1]);
+    ok(!Db::val('SELECT claimed_by_user_id FROM reservation_lanes WHERE reservation_id = ? AND lane_id = ?', [$rid, $lanes[1]]), 'osoblje oslobodilo stazu');
+});
+
 test('Turniri i kvalifikacije', function () {
     $o = mkuser('Vlasnik', '060000009', 'owner');
     $g = mkuser('Gost', '061000001');
